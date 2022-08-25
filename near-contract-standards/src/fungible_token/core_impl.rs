@@ -248,13 +248,11 @@ impl LookupMapAdapter {
 
     fn hash_key(&self, account: &AccountId) -> LookupMapKey {
         if let Some(postfix) = &self.skip_hashing_postfix {
-            let key_len = account.as_str().len() + postfix.len();
-            let ends_with_postfix = account.as_str().ends_with(postfix);
-            if ends_with_postfix && key_len < 32 {
-                    LookupMapKey::AccountId(account.to_string())
-                } else {
-                    LookupMapKey::Hash(env::sha256_array(account.as_bytes()))
-                }
+            if account.as_str().ends_with(postfix) {
+                LookupMapKey::AccountId(account.to_string())
+            } else {
+                LookupMapKey::Hash(env::sha256_array(account.as_bytes()))
+            }
         } else {
             LookupMapKey::Hash(env::sha256_array(account.as_bytes()))
         }
