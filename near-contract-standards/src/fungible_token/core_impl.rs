@@ -40,15 +40,16 @@ pub enum LookupMapKey { Hash([u8; 32]), AccountId(String) }
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct LookupMapAdapter {
     inner: LookupMap<LookupMapKey, Balance>,
+    skip_hashing_postfix: Option<String>,
 }
 
 impl FungibleToken {
-    pub fn new<S>(prefix: S) -> Self
+    pub fn new<S>(prefix: S, skip_hashing_postfix: Option<String>) -> Self
     where
         S: IntoStorageKey,
     {
         let mut this = Self {
-            accounts: LookupMapAdapter::new(prefix),
+            accounts: LookupMapAdapter::new(prefix, skip_hashing_postfix),
             total_supply: 0,
             account_storage_usage: 0
         };
@@ -238,32 +239,41 @@ impl FungibleTokenResolver for FungibleToken {
 }
 
 impl LookupMapAdapter {
-    fn new<S: IntoStorageKey>(prefix: S) -> LookupMapAdapter {
-        Self { inner: LookupMap::new(prefix) }
+    fn new<S: IntoStorageKey>(prefix: S, skip_hashing_postfix: Option<String>) -> LookupMapAdapter {
+        Self {
+            inner: LookupMap::new(prefix),
+            skip_hashing_postfix: skip_hashing_postfix,
+        }
     }
 
-    fn hash_key(account: &AccountId) -> LookupMapKey {
-        if account.as_str().ends_with(".u.sweat.testnet") && account.as_str().len() < 32 {
-            LookupMapKey::AccountId(account.to_string())
+    fn hash_key(&self, account: &AccountId) -> LookupMapKey {
+        if let Some(postfix) = &self.skip_hashing_postfix {
+            let key_len = account.as_str().len() + postfix.len();
+            let ends_with_postfix = account.as_str().ends_with(postfix);
+            if ends_with_postfix && key_len < 32 {
+                    LookupMapKey::AccountId(account.to_string())
+                } else {
+                    LookupMapKey::Hash(env::sha256_array(account.as_bytes()))
+                }
         } else {
             LookupMapKey::Hash(env::sha256_array(account.as_bytes()))
         }
     }
 
     pub fn get(&self, key: &AccountId) -> Option<Balance> {
-        self.inner.get(&Self::hash_key(key))
+        self.inner.get(&Self::hash_key(&self, key))
     }
 
     pub fn remove(&mut self, key: &AccountId) -> Option<Balance> {
-        self.inner.remove(&Self::hash_key(key))
+        self.inner.remove(&Self::hash_key(&self, key))
     }
 
     pub fn insert(&mut self, key: &AccountId, value: &Balance) -> Option<Balance> {
-        self.inner.insert(&Self::hash_key(key), value)
+        self.inner.insert(&Self::hash_key(&self, key), value)
     }
 
     /// Returns true if the map contains a given key.
     pub fn contains_key(&self, key: &AccountId) -> bool {
-        self.inner.contains_key(&Self::hash_key(key))
+        self.inner.contains_key(&Self::hash_key(&self, key))
     }
 }
