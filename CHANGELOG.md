@@ -2,6 +2,84 @@
 
 ## [Unreleased]
 
+## [4.1.1] - 2022-11-10
+
+### Fixed
+- Fixed invalid import from "legacy" feature flag from stabilized collection. [PR 960](https://github.com/near/near-sdk-rs/pull/960)
+
+## [4.1.0] - 2022-11-09
+
+### Added
+- Added `near_sdk::NearSchema` derive macro for convenience in implementing schema types for `abi`. [PR 891](https://github.com/near/near-sdk-rs/pull/891).
+- Added support for custom events with `#[near_bindgen(event_json(standard = "___"))]` syntax. [PR 934](https://github.com/near/near-sdk-rs/pull/934)
+
+### Changed
+- Added new `legacy` feature flag and put `near_sdk::collections` under it. `near_sdk::store` will be replacing them. [PR 923](https://github.com/near/near-sdk-rs/pull/923).
+- Stabilize `store::LookupMap` and `store::UnorderedMap` collections. [PR 922](https://github.com/near/near-sdk-rs/pull/922).
+- Stabilize `store::LookupSet` and `store::UnorderedSet` collections. [PR 924](https://github.com/near/near-sdk-rs/pull/924).
+- `abi` feature flag is now enabled by default. [PR 956](https://github.com/near/near-sdk-rs/pull/956).
+- Updated `near-abi` version to `0.3.0`. [PR 954](https://github.com/near/near-sdk-rs/pull/954).
+
+### Removed
+- Deleted `metadata` macro. Use https://github.com/near/abi instead. [PR 920](https://github.com/near/near-sdk-rs/pull/920)
+- Deprecated `ReceiptIndex` and `IteratorIndex` vm types. [PR 949](https://github.com/near/near-sdk-rs/pull/949).
+
+### Fixes
+- Updated the associated error type for `Base58CryptoHash` parsing through `TryFrom` to concrete type. [PR 919](https://github.com/near/near-sdk-rs/pull/919)
+
+## [4.1.0-pre.3] - 2022-08-30
+
+### Added
+- Enabled ABI embedding in contract through `__abi-embed` feature and [cargo-near](https://github.com/near/cargo-near). [PR 893](https://github.com/near/near-sdk-rs/pull/893)
+- Added `schemars::JsonSchema` implementations for `NFT` contract standard types to enable ABI generation. [PR 904](https://github.com/near/near-sdk-rs/pull/904)
+
+### Changed
+- Stabilized `store::Lazy` and `store::LazyOption` types and updated their debug implementations. [PR 897](https://github.com/near/near-sdk-rs/pull/897) [PR 888](https://github.com/near/near-sdk-rs/pull/888)
+
+## [4.1.0-pre.2] - 2022-08-26
+
+### Added
+- Support newly stabilized `alt_bn128` host functions that were recently stabilized. [PR 885](https://github.com/near/near-sdk-rs/pull/885)
+- Added `Eq` implementations for various types. [PR 887](https://github.com/near/near-sdk-rs/pull/887)
+- `alt_bn128` host functions supported in testing utils. [PR 885](https://github.com/near/near-sdk-rs/pull/885)
+
+### Fixes
+- Standards: NFT storage estimation bug fix and fix retrieval requiring enum and enumeration standard implementation. [PR 843](https://github.com/near/near-sdk-rs/pull/843)
+
+### Changed
+- `near_sdk::store::Vector` stabilized. [PR 815](https://github.com/near/near-sdk-rs/pull/815)
+- [ABI](https://github.com/near/abi) primitives moved into [near-abi-rs](https://github.com/near/near-abi-rs). [PR 889](https://github.com/near/near-sdk-rs/pull/889)
+
+## [4.1.0-pre.1] - 2022-08-05
+
+### Added
+- Exposed Rustdocs to exposed ABI type. [PR 876](https://github.com/near/near-sdk-rs/pull/876)
+
+### Changed
+- Updated `nearcore` dependencies used for unit testing to `0.14`. [PR 875](https://github.com/near/near-sdk-rs/pull/875)
+
+### Fixed
+- Handling of certain types through ABI macros. [PR 877](https://github.com/near/near-sdk-rs/pull/877)
+
+## [4.1.0-pre.0] - 2022-07-29
+
+### Added
+- `abi` feature to expose metadata about contract and functions to be consumed by [cargo-near](https://github.com/near/cargo-near). [PR 831](https://github.com/near/near-sdk-rs/pull/831), [PR 863](https://github.com/near/near-sdk-rs/pull/863), [PR 858](https://github.com/near/near-sdk-rs/pull/858)
+- Exposed `ext_ft_metadata` to call `FungibleTokenMetadataProvider` trait from an external contract. [PR 836](https://github.com/near/near-sdk-rs/pull/836)
+
+### Fixed
+- Safe math fixes for fungible token standard. [PR 830](https://github.com/near/near-sdk-rs/pull/830)
+  - This just ensures that there is no overflow if `overflow-checks` is not enabled by cargo
+
+### Changed
+- Enabled const-generics feature by default on borsh. [PR 828](https://github.com/near/near-sdk-rs/pull/828)
+- License changed from GPL-3 to MIT or Apache. [PR 837](https://github.com/near/near-sdk-rs/pull/837)
+- Put unit-testing logic behind `unit-testing` flag, which is enabled by default. [PR 870](https://github.com/near/near-sdk-rs/pull/870)
+  - This pulls in `nearcore` dependencies to mock the VM, so can turn off default-features to compile faster
+
+### Removed
+- Deprecated `near_contract_standards::upgrade`. [PR 856](https://github.com/near/near-sdk-rs/pull/856)
+  - Implementation did not match any NEAR standard and was not correct
 
 ## [4.0.0] - 2022-05-25
 
@@ -9,6 +87,10 @@
 - Added `Eq`, `PartialOrd`, `Ord` to `json_types` integer types. [PR 823](https://github.com/near/near-sdk-rs/pull/823)
 
 ### Changed
+- Updated cross-contract, `ext` API for new [`NEP264`](https://github.com/near/NEPs/pull/264) functionality. [PR 742](https://github.com/near/near-sdk-rs/pull/742)
+  - More details on the API change can be found [here](https://github.com/near/near-sdk-rs/issues/740)
+  - This API uses a default weight of `1` with no static gas, but this weight, the static gas, and the attached deposit can all be modified on any external call
+  - `ext` methods are added to each `#[near_bindgen]` contract struct by default and for each method for convenience
 - Updated `nearcore` crates used for unit testing to version `0.13.0`. [PR 820](https://github.com/near/near-sdk-rs/pull/820)
   - Removed `outcome` function from `MockedBlockchain` (incomplete and misleading data)
   - Changed `created_receipts` to return owned `Vec` instead of reference to one
@@ -290,7 +372,13 @@ impl StatusMessage {
 * Add account check to `get_balance` in fungible token https://github.com/near/near-sdk-rs/pull/175
 * In fungible token remove account from storage if its balance is 0 https://github.com/near/near-sdk-rs/pull/179
 
-[Unreleased]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.9...HEAD
+[Unreleased]: https://github.com/near/near-sdk-rs/compare/4.1.1...HEAD
+[4.1.1]: https://github.com/near/near-sdk-rs/compare/4.1.0...4.1.1
+[4.1.0]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.3...4.1.0
+[4.1.0-pre.3]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.2...4.1.0-pre.3
+[4.1.0-pre.2]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.1...4.1.0-pre.2
+[4.1.0-pre.1]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.0...4.1.0-pre.1
+[4.1.0-pre.0]: https://github.com/near/near-sdk-rs/compare/4.0.0...4.1.0-pre.0
 [4.0.0]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.9...4.0.0
 [4.0.0-pre.9]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.8...4.0.0-pre.9
 [4.0.0-pre.8]: https://github.com/near/near-sdk-rs/compare/4.0.0-pre.7...4.0.0-pre.8
