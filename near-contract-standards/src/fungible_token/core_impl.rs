@@ -37,10 +37,13 @@ pub struct FungibleToken {
     pub account_storage_usage: StorageUsage,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
-pub enum LookupMapKey { Hash([u8; 32]), AccountId(String) }
+#[near]
+pub enum LookupMapKey {
+    Hash([u8; 32]),
+    AccountId(String),
+}
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[near]
 pub struct LookupMapAdapter {
     inner: LookupMap<LookupMapKey, Balance>,
     skip_hashing_postfix: Option<String>,
@@ -54,7 +57,7 @@ impl FungibleToken {
         let mut this = Self {
             accounts: LookupMapAdapter::new(prefix, skip_hashing_postfix),
             total_supply: 0,
-            account_storage_usage: 0
+            account_storage_usage: 0,
         };
         this.measure_account_storage_usage();
         this
@@ -260,10 +263,7 @@ impl FungibleTokenResolver for FungibleToken {
 
 impl LookupMapAdapter {
     fn new<S: IntoStorageKey>(prefix: S, skip_hashing_postfix: Option<String>) -> LookupMapAdapter {
-        Self {
-            inner: LookupMap::new(prefix),
-            skip_hashing_postfix: skip_hashing_postfix,
-        }
+        Self { inner: LookupMap::new(prefix), skip_hashing_postfix }
     }
 
     fn hash_key(&self, account: &AccountId) -> LookupMapKey {
@@ -279,19 +279,19 @@ impl LookupMapAdapter {
     }
 
     pub fn get(&self, key: &AccountId) -> Option<Balance> {
-        self.inner.get(&Self::hash_key(&self, key))
+        self.inner.get(&Self::hash_key(self, key))
     }
 
     pub fn remove(&mut self, key: &AccountId) -> Option<Balance> {
-        self.inner.remove(&Self::hash_key(&self, key))
+        self.inner.remove(&Self::hash_key(self, key))
     }
 
     pub fn insert(&mut self, key: &AccountId, value: &Balance) -> Option<Balance> {
-        self.inner.insert(&Self::hash_key(&self, key), value)
+        self.inner.insert(&Self::hash_key(self, key), value)
     }
 
     /// Returns true if the map contains a given key.
     pub fn contains_key(&self, key: &AccountId) -> bool {
-        self.inner.contains_key(&Self::hash_key(&self, key))
+        self.inner.contains_key(&Self::hash_key(self, key))
     }
 }
