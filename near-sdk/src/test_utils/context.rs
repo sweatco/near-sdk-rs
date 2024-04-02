@@ -1,16 +1,14 @@
 use crate::mock::MockedBlockchain;
 use crate::test_utils::test_env::*;
-use crate::AccountId;
-use crate::{Balance, BlockHeight, EpochHeight, Gas, PromiseResult, PublicKey, StorageUsage};
-use near_primitives_core::runtime::fees::RuntimeFeesConfig;
-use near_vm_logic::{VMConfig, ViewConfig};
+use crate::{test_vm_config, AccountId};
+use crate::{BlockHeight, EpochHeight, Gas, NearToken, PromiseResult, PublicKey, StorageUsage};
+use near_parameters::RuntimeFeesConfig;
+use near_primitives_core::config::ViewConfig;
 use std::convert::TryInto;
 
 /// Returns a pre-defined account_id from a list of 6.
 pub fn accounts(id: usize) -> AccountId {
-    AccountId::new_unchecked(
-        ["alice", "bob", "charlie", "danny", "eugene", "fargo"][id].to_string(),
-    )
+    ["alice", "bob", "charlie", "danny", "eugene", "fargo"][id].parse().unwrap()
 }
 
 /// Simple VMContext builder that allows to quickly create custom context in tests.
@@ -53,14 +51,14 @@ pub struct VMContext {
 
     /// The balance attached to the given account. Excludes the `attached_deposit` that was
     /// attached to the transaction.
-    pub account_balance: Balance,
+    pub account_balance: NearToken,
     /// The balance of locked tokens on the given account.
-    pub account_locked_balance: Balance,
+    pub account_locked_balance: NearToken,
     /// The account's storage usage before the contract execution
     pub storage_usage: StorageUsage,
     /// The balance that was attached to the call that will be immediately deposited before the
     /// contract execution starts.
-    pub attached_deposit: Balance,
+    pub attached_deposit: NearToken,
     /// The gas attached to the call that can be used to pay for the gas fees.
     pub prepaid_gas: Gas,
     /// Initial seed for randomness
@@ -93,11 +91,11 @@ impl VMContextBuilder {
                 block_index: 0,
                 block_timestamp: 0,
                 epoch_height: 0,
-                account_balance: 10u128.pow(26),
-                account_locked_balance: 0,
+                account_balance: NearToken::from_yoctonear(10u128.pow(26)),
+                account_locked_balance: NearToken::from_near(0),
                 storage_usage: 1024 * 300,
-                attached_deposit: 0,
-                prepaid_gas: Gas(300 * 10u64.pow(12)),
+                attached_deposit: NearToken::from_near(0),
+                prepaid_gas: Gas::from_tgas(300),
                 random_seed: [0u8; 32],
                 view_config: None,
                 output_data_receivers: vec![],
@@ -125,8 +123,14 @@ impl VMContextBuilder {
         self
     }
 
+    #[deprecated(since = "4.1.2", note = "Use `block_height` method instead")]
     pub fn block_index(&mut self, block_index: BlockHeight) -> &mut Self {
         self.context.block_index = block_index;
+        self
+    }
+
+    pub fn block_height(&mut self, block_height: BlockHeight) -> &mut Self {
+        self.context.block_index = block_height;
         self
     }
 
@@ -140,12 +144,12 @@ impl VMContextBuilder {
         self
     }
 
-    pub fn account_balance(&mut self, amount: Balance) -> &mut Self {
+    pub fn account_balance(&mut self, amount: NearToken) -> &mut Self {
         self.context.account_balance = amount;
         self
     }
 
-    pub fn account_locked_balance(&mut self, amount: Balance) -> &mut Self {
+    pub fn account_locked_balance(&mut self, amount: NearToken) -> &mut Self {
         self.context.account_locked_balance = amount;
         self
     }
@@ -155,7 +159,7 @@ impl VMContextBuilder {
         self
     }
 
-    pub fn attached_deposit(&mut self, amount: Balance) -> &mut Self {
+    pub fn attached_deposit(&mut self, amount: NearToken) -> &mut Self {
         self.context.attached_deposit = amount;
         self
     }
@@ -190,7 +194,7 @@ pub fn testing_env_with_promise_results(context: VMContext, promise_result: Prom
     //? Might be a good time to remove this utility function altogether
     crate::env::set_blockchain_interface(MockedBlockchain::new(
         context,
-        VMConfig::test(),
+        test_vm_config(),
         RuntimeFeesConfig::test(),
         vec![promise_result],
         storage,

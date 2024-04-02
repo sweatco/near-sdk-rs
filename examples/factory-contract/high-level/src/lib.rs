@@ -1,9 +1,8 @@
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::PromiseError;
-use near_sdk::{env, ext_contract, json_types::U128, near_bindgen, AccountId, Promise};
+use near_sdk::{env, ext_contract, near, AccountId, NearToken, Promise};
 
-#[near_bindgen]
-#[derive(Default, BorshDeserialize, BorshSerialize)]
+#[derive(Default)]
+#[near(contract_state)]
 pub struct FactoryContract {}
 
 // If the `ext_contract` name is not provided explicitly, the namespace for generated methods is
@@ -14,12 +13,12 @@ pub trait ExtStatusMessage {
     fn get_status(&self, account_id: AccountId) -> Option<String>;
 }
 
-#[near_bindgen]
+#[near]
 impl FactoryContract {
-    pub fn deploy_status_message(&self, account_id: AccountId, amount: U128) {
+    pub fn deploy_status_message(&self, account_id: AccountId, amount: NearToken) {
         Promise::new(account_id)
             .create_account()
-            .transfer(amount.0)
+            .transfer(amount)
             .add_full_access_key(env::signer_account_pk())
             .deploy_contract(
                 include_bytes!("../../../status-message/res/status_message.wasm").to_vec(),

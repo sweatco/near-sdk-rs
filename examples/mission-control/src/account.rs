@@ -1,9 +1,9 @@
 use crate::asset::*;
 use crate::rate::*;
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops;
+
+use near_sdk::near;
 
 #[derive(
     PartialEq,
@@ -12,17 +12,16 @@ use std::ops;
     Hash,
     Clone,
     Copy,
-    Serialize,
-    Deserialize,
     Debug,
-    BorshDeserialize,
-    BorshSerialize,
 )]
-#[serde(crate = "near_sdk::serde")]
+#[near(serializers = [json, borsh])]
 pub struct Quantity(pub i32);
 
-#[derive(Clone, Serialize, Deserialize, BorshDeserialize, BorshSerialize)]
-#[serde(crate = "near_sdk::serde")]
+#[near]
+pub struct X;
+
+#[derive(Clone)]
+#[near(serializers = [json, borsh])]
 pub struct Account(pub HashMap<Asset, Quantity>);
 
 pub enum Tranx {

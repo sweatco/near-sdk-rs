@@ -3,14 +3,237 @@ extern crate proc_macro;
 
 mod core_impl;
 
-use core_impl::ext::generate_ext_structs;
+use core_impl::{ext::generate_ext_structs, metadata::generate_contract_metadata_method};
+
 use proc_macro::TokenStream;
 
 use self::core_impl::*;
-use proc_macro2::Span;
+use darling::ast::NestedMeta;
+use darling::{Error, FromMeta};
+use proc_macro2::{Ident, Span};
 use quote::{quote, ToTokens};
-use syn::visit::Visit;
-use syn::{parse_quote, File, ItemEnum, ItemImpl, ItemStruct, ItemTrait, WhereClause};
+use syn::{parse_quote, Expr, ImplItem, ItemEnum, ItemImpl, ItemStruct, ItemTrait, WhereClause};
+
+#[derive(Debug, Clone)]
+struct Serializers {
+    vec: Vec<Expr>,
+}
+
+impl FromMeta for Serializers {
+    fn from_expr(expr: &syn::Expr) -> Result<Self, darling::Error> {
+        match expr {
+            syn::Expr::Array(expr_array) => Ok(Serializers {
+                vec: expr_array
+                    .elems
+                    .iter()
+                    .map(<Expr as FromMeta>::from_expr)
+                    .map(|x| x.unwrap())
+                    .collect::<Vec<_>>(),
+            }),
+            _ => Err(Error::unexpected_expr_type(expr)),
+        }
+    }
+}
+
+#[derive(FromMeta)]
+struct NearMacroArgs {
+    serializers: Option<Serializers>,
+    contract_state: Option<bool>,
+    contract_metadata: Option<core_impl::ContractMetadata>,
+    inside_nearsdk: Option<bool>,
+}
+
+/// This attribute macro is used to enhance the near_bindgen macro.
+/// It is used to add Borsh and Serde derives for serialization and deserialization.
+/// It also adds `BorshSchema` and `JsonSchema` if needed
+///
+/// If you would like to add Borsh or Serde serialization and deserialization to your contract,
+/// you can use the abi attribute and pass in the serializers you would like to use.
+///
+/// # Example
+///
+/// ```ignore
+/// #[near(serializers=[borsh, json])]
+/// struct MyStruct {
+///    pub name: String,
+/// }
+/// ```
+/// effectively becomes:
+/// ```ignore
+/// use borsh::{BorshSerialize, BorshDeserialize};
+/// use serde::{Serialize, Deserialize};
+/// use near_sdk_macro::NearSchema;
+/// #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, NearSchema)]
+/// #[borsh(crate = "near_sdk::borsh")]
+/// #[serde(crate = "near_sdk::serde")]
+/// struct MyStruct {
+///   pub name: String,
+/// }
+/// ```
+/// Please note that `BorshSchema` and `JsonSchema` are added inside NearSchema whenever you use near macro for struct or enum.
+/// By default, if no serializers are passed, Borsh is used.
+///
+/// If you want this struct to be a contract state, you can pass in the contract_state argument.
+///
+/// # Example
+/// ```ignore
+/// #[near(contract_state)]
+/// struct MyStruct {
+///     pub name: String,
+/// }
+/// ```
+/// becomes:
+/// ```ignore
+/// #[near_bindgen]
+/// #[derive(BorshSerialize, BorshDeserialize, NearSchema)]
+/// #[borsh(crate = "near_sdk::borsh")]
+/// struct MyStruct {
+///    pub name: String,
+/// }
+/// ```
+///
+/// As well, the macro supports arguments like `event_json` and `contract_metadata`.
+///
+#[proc_macro_attribute]
+pub fn near(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if attr.to_string().contains("event_json") {
+        return core_impl::near_events(attr, item);
+    }
+
+    let meta_list = match NestedMeta::parse_meta_list(attr.into()) {
+        Ok(v) => v,
+        Err(e) => {
+            return TokenStream::from(Error::from(e).write_errors());
+        }
+    };
+
+    let near_macro_args = match NearMacroArgs::from_list(&meta_list) {
+        Ok(v) => v,
+        Err(e) => {
+            return TokenStream::from(e.write_errors());
+        }
+    };
+
+    let near_sdk_crate = if near_macro_args.inside_nearsdk.unwrap_or(false) {
+        quote! {crate}
+    } else {
+        quote! {::near_sdk}
+    };
+    let string_borsh_crate = quote! {#near_sdk_crate::borsh}.to_string();
+    let string_serde_crate = quote! {#near_sdk_crate::serde}.to_string();
+
+    let mut expanded: proc_macro2::TokenStream = quote! {};
+
+    if near_macro_args.contract_state.unwrap_or(false) {
+        if let Some(metadata) = near_macro_args.contract_metadata {
+            expanded = quote! {#[#near_sdk_crate::near_bindgen(#metadata)]}
+        } else {
+            expanded = quote! {#[#near_sdk_crate::near_bindgen]}
+        }
+    };
+
+    let mut has_borsh = false;
+    let mut has_json = false;
+
+    let mut borsh_attr = quote! {};
+
+    match near_macro_args.serializers {
+        Some(serializers) => {
+            let attr2 = serializers.clone();
+
+            attr2.vec.iter().for_each(|old_expr| {
+                let new_expr = &mut old_expr.clone();
+                match &mut *new_expr {
+                    Expr::Call(ref mut call_expr) => {
+                        if let Expr::Path(ref mut path) = &mut *call_expr.func {
+                            if let Some(ident) = path.path.get_ident() {
+                                if *ident == "json" {
+                                    has_json = true;
+                                    path.path =
+                                        syn::Path::from(Ident::new("serde", Span::call_site()));
+                                    call_expr.args.push(parse_quote! {crate=#string_serde_crate});
+                                } else if *ident == "borsh" {
+                                    has_borsh = true;
+                                    call_expr.args.push(parse_quote! {crate=#string_borsh_crate});
+                                }
+                            }
+                        }
+                        borsh_attr = quote! {#[#new_expr]};
+                    }
+                    Expr::Path(ref mut path_expr) => {
+                        if let Some(ident) = path_expr.path.get_ident() {
+                            if *ident == "json" {
+                                has_json = true;
+                            }
+                            if *ident == "borsh" {
+                                has_borsh = true;
+                                borsh_attr = quote! {#[borsh(crate=#string_borsh_crate)]};
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            });
+        }
+        None => {
+            has_borsh = true;
+            borsh_attr = quote! {#[borsh(crate = #string_borsh_crate)]};
+        }
+    }
+
+    #[cfg(feature = "abi")]
+    {
+        let schema_derive: proc_macro2::TokenStream =
+            get_schema_derive(has_json, has_borsh, near_sdk_crate.clone(), false);
+        expanded = quote! {
+            #expanded
+            #schema_derive
+        };
+    }
+
+    if has_borsh {
+        expanded = quote! {
+            #expanded
+            #[derive(#near_sdk_crate::borsh::BorshSerialize, #near_sdk_crate::borsh::BorshDeserialize)]
+            #borsh_attr
+        };
+    }
+
+    if has_json {
+        expanded = quote! {
+            #expanded
+            #[derive(#near_sdk_crate::serde::Serialize, #near_sdk_crate::serde::Deserialize)]
+            #[serde(crate = #string_serde_crate)]
+        };
+    }
+
+    if let Ok(input) = syn::parse::<ItemStruct>(item.clone()) {
+        expanded = quote! {
+            #expanded
+            #input
+        };
+    } else if let Ok(input) = syn::parse::<ItemEnum>(item.clone()) {
+        expanded = quote! {
+            #expanded
+            #input
+        };
+    } else if let Ok(input) = syn::parse::<ItemImpl>(item) {
+        expanded = quote! {
+            #[#near_sdk_crate::near_bindgen]
+            #input
+        };
+    } else {
+        return TokenStream::from(
+            syn::Error::new(
+                Span::call_site(),
+                "near macro can only be used on struct or enum definition and impl sections.",
+            )
+            .to_compile_error(),
+        );
+    }
+
+    TokenStream::from(expanded)
+}
 
 /// This attribute macro is used on a struct and its implementations
 /// to generate the necessary code to expose `pub` methods from the contract as well
@@ -82,69 +305,111 @@ use syn::{parse_quote, File, ItemEnum, ItemImpl, ItemStruct, ItemTrait, WhereCla
 ///
 /// }
 /// ```
+///
+/// Contract Source Metadata Standard:
+///
+/// By using `contract_metadata` as an argument `near_bindgen` will populate the contract metadata
+/// according to [`NEP-330`](<https://github.com/near/NEPs/blob/master/neps/nep-0330.md>) standard. This still applies even when `#[near_bindgen]` is used without
+/// any arguments.
+///
+/// All fields(version, link, standard) are optional and will be populated with defaults from the Cargo.toml file if not specified.
+///
+/// The `contract_source_metadata()` view function will be added and can be used to retrieve the source metadata.
+/// Also, the source metadata will be stored as a constant, `CONTRACT_SOURCE_METADATA`, in the contract code.
+///
+/// # Examples
+/// ```ignore
+/// use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+/// use near_sdk::near_bindgen;
+///
+/// #[derive(Default, BorshSerialize, BorshDeserialize)]
+/// #[near_bindgen(contract_metadata(
+///     version = "39f2d2646f2f60e18ab53337501370dc02a5661c",
+///     link = "https://github.com/near-examples/nft-tutorial",
+///     standard(standard = "nep330", version = "1.1.0"),
+///     standard(standard = "nep171", version = "1.0.0"),
+///     standard(standard = "nep177", version = "2.0.0"),
+/// ))]
+/// struct Contract {}
+/// ```
 #[proc_macro_attribute]
 pub fn near_bindgen(attr: TokenStream, item: TokenStream) -> TokenStream {
     if attr.to_string().contains("event_json") {
         return core_impl::near_events(attr, item);
     }
 
+    let generate_metadata = |ident: &Ident,
+                             generics: &syn::Generics|
+     -> Result<proc_macro2::TokenStream, proc_macro2::TokenStream> {
+        let metadata_impl_gen = generate_contract_metadata_method(ident, generics).into();
+        let metadata_impl_gen = syn::parse::<ItemImpl>(metadata_impl_gen)
+            .expect("failed to generate contract metadata");
+        process_impl_block(metadata_impl_gen)
+    };
+
     if let Ok(input) = syn::parse::<ItemStruct>(item.clone()) {
-        let ext_gen = generate_ext_structs(&input.ident, Some(&input.generics));
-        #[cfg(feature = "__abi-embed")]
-        let abi_embedded = abi::embed();
-        #[cfg(not(feature = "__abi-embed"))]
-        let abi_embedded = quote! {};
-        TokenStream::from(quote! {
-            #input
-            #ext_gen
-            #abi_embedded
-        })
-    } else if let Ok(input) = syn::parse::<ItemEnum>(item.clone()) {
-        let ext_gen = generate_ext_structs(&input.ident, Some(&input.generics));
-        #[cfg(feature = "__abi-embed")]
-        let abi_embedded = abi::embed();
-        #[cfg(not(feature = "__abi-embed"))]
-        let abi_embedded = quote! {};
-        TokenStream::from(quote! {
-            #input
-            #ext_gen
-            #abi_embedded
-        })
-    } else if let Ok(mut input) = syn::parse::<ItemImpl>(item) {
-        let item_impl_info = match ItemImplInfo::new(&mut input) {
-            Ok(x) => x,
-            Err(err) => {
-                return err.to_compile_error().into();
-            }
+        let metadata = core_impl::contract_source_metadata_const(attr);
+
+        let metadata_impl_gen = generate_metadata(&input.ident, &input.generics);
+
+        let metadata_impl_gen = match metadata_impl_gen {
+            Ok(metadata) => metadata,
+            Err(err) => return err.into(),
         };
 
-        #[cfg(not(feature = "__abi-generate"))]
-        let abi_generated = quote! {};
-        #[cfg(feature = "__abi-generate")]
-        let abi_generated = abi::generate(&item_impl_info);
+        let ext_gen = generate_ext_structs(&input.ident, Some(&input.generics));
+        #[cfg(feature = "__abi-embed-checked")]
+        let abi_embedded = abi::embed();
+        #[cfg(not(feature = "__abi-embed-checked"))]
+        let abi_embedded = quote! {};
+        TokenStream::from(quote! {
+            #input
+            #ext_gen
+            #abi_embedded
+            #metadata
+            #metadata_impl_gen
+        })
+    } else if let Ok(input) = syn::parse::<ItemEnum>(item.clone()) {
+        let metadata = core_impl::contract_source_metadata_const(attr);
+        let metadata_impl_gen = generate_metadata(&input.ident, &input.generics);
 
-        for method in &item_impl_info.methods {
-            if method.attr_signature_info.ident == "__contract_abi" {
-                return TokenStream::from(
-                    syn::Error::new_spanned(
-                        method.attr_signature_info.original_sig.ident.to_token_stream(),
-                        "use of reserved contract method",
-                    )
-                    .to_compile_error(),
-                );
+        let metadata_impl_gen = match metadata_impl_gen {
+            Ok(metadata) => metadata,
+            Err(err) => return err.into(),
+        };
+
+        let ext_gen = generate_ext_structs(&input.ident, Some(&input.generics));
+        #[cfg(feature = "__abi-embed-checked")]
+        let abi_embedded = abi::embed();
+        #[cfg(not(feature = "__abi-embed-checked"))]
+        let abi_embedded = quote! {};
+        TokenStream::from(quote! {
+            #input
+            #ext_gen
+            #abi_embedded
+            #metadata
+            #metadata_impl_gen
+        })
+    } else if let Ok(input) = syn::parse::<ItemImpl>(item) {
+        for method in &input.items {
+            if let ImplItem::Fn(m) = method {
+                let ident = &m.sig.ident;
+                if ident.eq("__contract_abi") || ident.eq("contract_source_metadata") {
+                    return TokenStream::from(
+                        syn::Error::new_spanned(
+                            ident.to_token_stream(),
+                            "use of reserved contract method",
+                        )
+                        .to_compile_error(),
+                    );
+                }
             }
         }
-
-        let generated_code = item_impl_info.wrapper_code();
-
-        // Add wrapper methods for ext call API
-        let ext_generated_code = item_impl_info.generate_ext_wrapper_code();
-        TokenStream::from(quote! {
-            #ext_generated_code
-            #input
-            #generated_code
-            #abi_generated
-        })
+        match process_impl_block(input) {
+            Ok(output) => output,
+            Err(output) => output,
+        }
+        .into()
     } else {
         TokenStream::from(
             syn::Error::new(
@@ -154,6 +419,39 @@ pub fn near_bindgen(attr: TokenStream, item: TokenStream) -> TokenStream {
             .to_compile_error(),
         )
     }
+}
+
+// This function deals with impl block processing, generating wrappers and ABI.
+//
+// # Arguments
+// * input - impl block to process.
+//
+// The Result has a TokenStream error type, because those need to be propagated to the compiler.
+fn process_impl_block(
+    mut input: ItemImpl,
+) -> Result<proc_macro2::TokenStream, proc_macro2::TokenStream> {
+    let item_impl_info = match ItemImplInfo::new(&mut input) {
+        Ok(x) => x,
+        Err(err) => return Err(err.to_compile_error()),
+    };
+
+    #[cfg(not(feature = "__abi-generate"))]
+    let abi_generated = quote! {};
+    #[cfg(feature = "__abi-generate")]
+    let abi_generated = abi::generate(&item_impl_info);
+
+    let generated_code = item_impl_info.wrapper_code();
+
+    // Add wrapper methods for ext call API
+    let ext_generated_code = item_impl_info.generate_ext_wrapper_code();
+
+    Ok(TokenStream::from(quote! {
+        #ext_generated_code
+        #input
+        #generated_code
+        #abi_generated
+    })
+    .into())
 }
 
 /// `ext_contract` takes a Rust Trait and converts it to a module with static methods.
@@ -245,207 +543,218 @@ pub fn init(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-/// `metadata` generates the metadata method and should be placed at the very end of the `lib.rs` file.
-// TODO: Once Rust allows inner attributes and custom procedural macros for modules we should switch this
-// to be `#![metadata]` attribute at the top of the contract file instead. https://github.com/rust-lang/rust/issues/54727
-#[deprecated(
-    since = "4.1.0",
-    note = "metadata macro is no longer used. Use https://github.com/near/abi to generate a contract schema"
-)]
-#[proc_macro]
-pub fn metadata(item: TokenStream) -> TokenStream {
-    if let Ok(input) = syn::parse::<File>(item) {
-        let mut visitor = MetadataVisitor::new();
-        visitor.visit_file(&input);
-        let generated = match visitor.generate_metadata_method() {
-            Ok(x) => x,
-            Err(err) => return TokenStream::from(err.to_compile_error()),
-        };
-        TokenStream::from(quote! {
-            #input
-            #generated
-        })
-    } else {
-        TokenStream::from(
-            syn::Error::new(
-                Span::call_site(),
-                "Failed to parse code decorated with `metadata!{}` macro. Only valid Rust is supported.",
-            )
-            .to_compile_error(),
-        )
-    }
+#[cfg(feature = "abi")]
+#[derive(darling::FromDeriveInput, Debug)]
+#[darling(attributes(abi), forward_attrs(serde, borsh_skip, schemars, validate))]
+struct DeriveNearSchema {
+    attrs: Vec<syn::Attribute>,
+    json: Option<bool>,
+    borsh: Option<bool>,
 }
 
-#[cfg(feature = "abi")]
-#[proc_macro_derive(NearSchema, attributes(abi, serde, borsh_skip, schemars, validate))]
-pub fn derive_near_schema(input: TokenStream) -> TokenStream {
-    let mut input = syn::parse_macro_input!(input as syn::DeriveInput);
-
-    let (mut json_schema, mut borsh_schema) = (false, false);
-    let mut type_attrs = vec![];
-    let mut errors = vec![];
-    for attr in input.attrs {
-        match attr.parse_meta() {
-            // #[abi]
-            Ok(syn::Meta::Path(meta)) if meta.is_ident("abi") => {
-                errors.push(syn::Error::new_spanned(
-                    meta.into_token_stream(),
-                    "attribute requires at least one argument",
-                ));
-            }
-            // #[abi(json, borsh)]
-            Ok(syn::Meta::List(meta)) if meta.path.is_ident("abi") => {
-                // #[abi()]
-                if meta.nested.is_empty() {
-                    errors.push(syn::Error::new_spanned(
-                        meta.into_token_stream(),
-                        "attribute requires at least one argument",
-                    ));
-                    continue;
-                }
-                for meta in meta.nested {
-                    match meta {
-                        // #[abi(.. json ..)]
-                        syn::NestedMeta::Meta(m) if m.path().is_ident("json") => json_schema = true,
-                        // #[abi(.. borsh ..)]
-                        syn::NestedMeta::Meta(m) if m.path().is_ident("borsh") => {
-                            borsh_schema = true
-                        }
-                        _ => {
-                            errors.push(syn::Error::new_spanned(
-                                meta.into_token_stream(),
-                                "invalid argument, expected: `json` or `borsh`",
-                            ));
-                        }
-                    }
-                }
-            }
-            // #[serde(..)], #[schemars(..)]
-            Ok(syn::Meta::List(meta))
-                if meta.path.is_ident("serde") || meta.path.is_ident("schemars") =>
-            {
-                type_attrs.push(attr)
-            }
-            _ => continue,
-        }
+#[proc_macro_derive(NearSchema, attributes(abi, serde, borsh, schemars, validate, inside_nearsdk))]
+pub fn derive_near_schema(#[allow(unused)] input: TokenStream) -> TokenStream {
+    #[cfg(not(feature = "abi"))]
+    {
+        TokenStream::from(quote! {})
     }
 
-    input.attrs = type_attrs;
+    #[cfg(feature = "abi")]
+    {
+        use darling::FromDeriveInput;
 
-    let strip_unknown_attr = |attrs: &mut Vec<syn::Attribute>| {
-        attrs.retain(|attr| {
-            ["serde", "schemars", "validate", "borsh_skip"]
-                .iter()
-                .any(|&path| attr.path.is_ident(path))
-        });
-    };
-
-    match &mut input.data {
-        syn::Data::Struct(data) => {
-            for field in &mut data.fields {
-                strip_unknown_attr(&mut field.attrs);
+        let derive_input = syn::parse_macro_input!(input as syn::DeriveInput);
+        let generics = derive_input.generics.clone();
+        let args = match DeriveNearSchema::from_derive_input(&derive_input) {
+            Ok(v) => v,
+            Err(e) => {
+                return TokenStream::from(e.write_errors());
             }
+        };
+
+        if args.borsh.is_none()
+            && args.json.is_none()
+            && derive_input.clone().attrs.iter().any(|attr| attr.path().is_ident("abi"))
+        {
+            return TokenStream::from(
+                syn::Error::new_spanned(
+                    derive_input.to_token_stream(),
+                    "At least one of `json` or `borsh` inside of `#[abi(...)]` must be specified",
+                )
+                .to_compile_error(),
+            );
         }
-        syn::Data::Enum(data) => {
-            for variant in &mut data.variants {
-                strip_unknown_attr(&mut variant.attrs);
-                for field in &mut variant.fields {
+
+        // #[abi(json, borsh)]
+        let (json_schema, borsh_schema) = (args.json.unwrap_or(false), args.borsh.unwrap_or(false));
+        let mut input = derive_input.clone();
+        input.attrs = args.attrs;
+
+        let strip_unknown_attr = |attrs: &mut Vec<syn::Attribute>| {
+            attrs.retain(|attr| {
+                ["serde", "schemars", "validate", "borsh"]
+                    .iter()
+                    .any(|&path| attr.path().is_ident(path))
+            });
+        };
+
+        match &mut input.data {
+            syn::Data::Struct(data) => {
+                for field in &mut data.fields {
                     strip_unknown_attr(&mut field.attrs);
                 }
             }
-        }
-        syn::Data::Union(_) => {
-            return TokenStream::from(
-                syn::Error::new_spanned(
-                    input.to_token_stream(),
-                    "`NearSchema` does not support derive for unions",
+            syn::Data::Enum(data) => {
+                for variant in &mut data.variants {
+                    strip_unknown_attr(&mut variant.attrs);
+                    for field in &mut variant.fields {
+                        strip_unknown_attr(&mut field.attrs);
+                    }
+                }
+            }
+            syn::Data::Union(_) => {
+                return TokenStream::from(
+                    syn::Error::new_spanned(
+                        input.to_token_stream(),
+                        "`NearSchema` does not support derive for unions",
+                    )
+                    .to_compile_error(),
                 )
-                .to_compile_error(),
-            )
-        }
-    }
-
-    if let Some(combined_errors) = errors.into_iter().reduce(|mut l, r| (l.combine(r), l).1) {
-        return TokenStream::from(combined_errors.to_compile_error());
-    }
-
-    let json_schema = json_schema || !borsh_schema;
-
-    let derive = match (json_schema, borsh_schema) {
-        // <unspecified> or #[abi(json)]
-        (_, false) => quote! {
-            #[derive(schemars::JsonSchema)]
-        },
-        // #[abi(borsh)]
-        (false, true) => quote! {
-            #[derive(borsh::BorshSchema)]
-        },
-        // #[abi(json, borsh)]
-        (true, true) => quote! {
-            #[derive(schemars::JsonSchema, borsh::BorshSchema)]
-        },
-    };
-
-    let input_ident = &input.ident;
-
-    let input_ident_proxy = quote::format_ident!("{}__NEAR_SCHEMA_PROXY", input_ident);
-
-    let json_impl = if json_schema {
-        quote! {
-            #[automatically_derived]
-            impl schemars::JsonSchema for #input_ident_proxy {
-                fn schema_name() -> ::std::string::String {
-                    stringify!(#input_ident).to_string()
-                }
-
-                fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-                    <#input_ident as schemars::JsonSchema>::json_schema(gen)
-                }
             }
         }
-    } else {
-        quote! {}
-    };
 
-    let borsh_impl = if borsh_schema {
-        quote! {
-            #[automatically_derived]
-            impl borsh::BorshSchema for #input_ident_proxy {
-                fn declaration() -> ::std::string::String {
-                    stringify!(#input_ident).to_string()
-                }
-
-                fn add_definitions_recursively(
-                    definitions: &mut borsh::maybestd::collections::HashMap<
-                        borsh::schema::Declaration,
-                        borsh::schema::Definition,
-                    >,
-                ) {
-                    <#input_ident as borsh::BorshSchema>::add_definitions_recursively(definitions);
-                }
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    TokenStream::from(quote! {
-        #[cfg(not(target_arch = "wasm32"))]
-        const _: () = {
-            #[allow(non_camel_case_types)]
-            type #input_ident_proxy = #input_ident;
-            {
-                use near_sdk::borsh;
-                use near_sdk::__private::schemars;
-
-                #derive
-                #input
-
-                #json_impl
-                #borsh_impl
+        let near_sdk_crate =
+            if derive_input.attrs.iter().any(|attr| attr.path().is_ident("inside_nearsdk")) {
+                quote! {crate}
+            } else {
+                quote! {::near_sdk}
             };
+
+        // <unspecified> or #[abi(json)]
+        let json_schema = json_schema || !borsh_schema;
+
+        let derive = get_schema_derive(json_schema, borsh_schema, near_sdk_crate.clone(), true);
+
+        let input_ident = &input.ident;
+
+        let input_ident_proxy = quote::format_ident!("{}__NEAR_SCHEMA_PROXY", input_ident);
+
+        let json_impl = if json_schema {
+            let where_clause = get_where_clause(
+                &generics,
+                input_ident,
+                quote! {#near_sdk_crate::schemars::JsonSchema},
+            );
+            quote! {
+                #[automatically_derived]
+                impl #generics #near_sdk_crate::schemars::JsonSchema for #input_ident_proxy #generics #where_clause {
+                    fn schema_name() -> ::std::string::String {
+                        stringify!(#input_ident #generics).to_string()
+                    }
+
+                    fn json_schema(gen: &mut #near_sdk_crate::schemars::gen::SchemaGenerator) -> #near_sdk_crate::schemars::schema::Schema {
+                        <#input_ident #generics as #near_sdk_crate::schemars::JsonSchema>::json_schema(gen)
+                    }
+                }
+            }
+        } else {
+            quote! {}
         };
-    })
+
+        let borsh_impl = if borsh_schema {
+            let where_clause = get_where_clause(
+                &generics,
+                input_ident,
+                quote! {#near_sdk_crate::borsh::BorshSchema},
+            );
+            quote! {
+                #[automatically_derived]
+                impl #generics #near_sdk_crate::borsh::BorshSchema for #input_ident_proxy #generics #where_clause {
+                    fn declaration() -> #near_sdk_crate::borsh::schema::Declaration {
+                        stringify!(#input_ident #generics).to_string()
+                    }
+
+                    fn add_definitions_recursively(
+                        definitions: &mut #near_sdk_crate::borsh::__private::maybestd::collections::BTreeMap<
+                            #near_sdk_crate::borsh::schema::Declaration,
+                            #near_sdk_crate::borsh::schema::Definition
+                        >,
+                    ) {
+                        <#input_ident #generics as #near_sdk_crate::borsh::BorshSchema>::add_definitions_recursively(definitions);
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        TokenStream::from(quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            const _: () = {
+                #[allow(non_camel_case_types)]
+                type #input_ident_proxy #generics = #input_ident #generics;
+                {
+                    #derive
+                    #[allow(dead_code)]
+                    #input
+
+                    #json_impl
+                    #borsh_impl
+                };
+            };
+        })
+    }
+}
+
+#[allow(dead_code)]
+fn get_schema_derive(
+    json_schema: bool,
+    borsh_schema: bool,
+    near_sdk_crate: proc_macro2::TokenStream,
+    need_borsh_crate: bool,
+) -> proc_macro2::TokenStream {
+    let string_borsh_crate = quote! {#near_sdk_crate::borsh}.to_string();
+    let string_schemars_crate = quote! {#near_sdk_crate::schemars}.to_string();
+
+    let mut derive = quote! {};
+    if borsh_schema {
+        derive = quote! {
+            #[cfg_attr(not(target_arch = "wasm32"), derive(#near_sdk_crate::borsh::BorshSchema))]
+        };
+        if need_borsh_crate {
+            derive = quote! {
+                #derive
+                #[cfg_attr(not(target_arch = "wasm32"), borsh(crate = #string_borsh_crate))]
+            };
+        }
+    }
+    if json_schema {
+        derive = quote! {
+            #derive
+            #[cfg_attr(not(target_arch = "wasm32"), derive(#near_sdk_crate::schemars::JsonSchema))]
+            #[cfg_attr(not(target_arch = "wasm32"), schemars(crate = #string_schemars_crate))]
+        };
+    }
+    derive
+}
+
+#[cfg(feature = "abi")]
+fn get_where_clause(
+    generics: &syn::Generics,
+    input_ident: &syn::Ident,
+    trait_name: proc_macro2::TokenStream,
+) -> WhereClause {
+    let (_, ty_generics, where_clause) = generics.split_for_impl();
+
+    let predicate = parse_quote!(#input_ident #ty_generics: #trait_name);
+
+    let where_clause: WhereClause = if let Some(mut w) = where_clause.cloned() {
+        w.predicates.push(predicate);
+        w
+    } else {
+        parse_quote!(where #predicate)
+    };
+    where_clause
 }
 
 /// `PanicOnDefault` generates implementation for `Default` trait that panics with the following
@@ -457,9 +766,9 @@ pub fn derive_no_default(item: TokenStream) -> TokenStream {
     if let Ok(input) = syn::parse::<ItemStruct>(item) {
         let name = &input.ident;
         TokenStream::from(quote! {
-            impl Default for #name {
+            impl ::std::default::Default for #name {
                 fn default() -> Self {
-                    near_sdk::env::panic_str("The contract is not initialized");
+                    ::near_sdk::env::panic_str("The contract is not initialized");
                 }
             }
         })
@@ -501,7 +810,7 @@ pub fn borsh_storage_key(item: TokenStream) -> TokenStream {
         parse_quote!(where #predicate)
     };
     TokenStream::from(quote! {
-        impl #impl_generics near_sdk::__private::BorshIntoStorageKey for #name #ty_generics #where_clause {}
+        impl #impl_generics ::near_sdk::__private::BorshIntoStorageKey for #name #ty_generics #where_clause {}
     })
 }
 
@@ -524,9 +833,9 @@ pub fn function_error(item: TokenStream) -> TokenStream {
         );
     };
     TokenStream::from(quote! {
-        impl near_sdk::FunctionError for #name {
+        impl ::near_sdk::FunctionError for #name {
             fn panic(&self) -> ! {
-                near_sdk::env::panic_str(&::std::string::ToString::to_string(&self))
+                ::near_sdk::env::panic_str(&::std::string::ToString::to_string(&self))
             }
         }
     })
@@ -559,7 +868,7 @@ pub fn derive_event_attributes(item: TokenStream) -> TokenStream {
             if let Some(version) = core_impl::get_event_version(var) {
                 let var_ident = &var.ident;
                 event_meta.push(quote! {
-                    #name::#var_ident { .. } => {(#standard_ident.to_string(), #version.to_string())}
+                    #name::#var_ident { .. } => {(::std::string::ToString::to_string(&#standard_ident), ::std::string::ToString::to_string(#version))}
                 })
             } else {
                 return TokenStream::from(
@@ -577,20 +886,23 @@ pub fn derive_event_attributes(item: TokenStream) -> TokenStream {
         // add `'near_event` lifetime for user defined events
         let mut generics = input.generics.clone();
         let event_lifetime = syn::Lifetime::new("'near_event", Span::call_site());
-        generics
-            .params
-            .insert(0, syn::GenericParam::Lifetime(syn::LifetimeDef::new(event_lifetime.clone())));
+        generics.params.insert(
+            0,
+            syn::GenericParam::Lifetime(syn::LifetimeParam::new(event_lifetime.clone())),
+        );
         let (custom_impl_generics, ..) = generics.split_for_impl();
 
         TokenStream::from(quote! {
             impl #impl_generics #name #type_generics #where_clause {
-                fn emit(&self) {
+                pub fn emit(&self) {
+                    use ::std::string::String;
+
                     let (standard, version): (String, String) = match self {
                         #(#event_meta),*
                     };
 
-                    #[derive(near_sdk::serde::Serialize)]
-                    #[serde(crate="near_sdk::serde")]
+                    #[derive(::near_sdk::serde::Serialize)]
+                    #[serde(crate="::near_sdk::serde")]
                     #[serde(rename_all="snake_case")]
                     struct EventBuilder #custom_impl_generics #where_clause {
                         standard: String,
@@ -599,9 +911,9 @@ pub fn derive_event_attributes(item: TokenStream) -> TokenStream {
                         event_data: &#event_lifetime #name #type_generics
                     }
                     let event = EventBuilder { standard, version, event_data: self };
-                    let json = near_sdk::serde_json::to_string(&event)
-                            .unwrap_or_else(|_| near_sdk::env::abort());
-                    near_sdk::env::log_str(&format!("EVENT_JSON:{}", json));
+                    let json = ::near_sdk::serde_json::to_string(&event)
+                            .unwrap_or_else(|_| ::near_sdk::env::abort());
+                    ::near_sdk::env::log_str(&::std::format!("EVENT_JSON:{}", json));
                 }
             }
         })

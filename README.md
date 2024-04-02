@@ -14,6 +14,7 @@
     <a href="https://crates.io/crates/near-sdk"><img src="https://img.shields.io/crates/v/near-sdk.svg?style=flat-square" alt="Crates.io version" /></a>
     <a href="https://crates.io/crates/near-sdk"><img src="https://img.shields.io/crates/d/near-sdk.svg?style=flat-square" alt="Download" /></a>
     <a href="https://docs.rs/near-sdk"><img src="https://docs.rs/near-sdk/badge.svg" alt="Reference Documentation" /></a>
+    <a href="https://blog.rust-lang.org/2023/08/24/Rust-1.72.0.html"><img src="https://img.shields.io/badge/rustc-1.72+-lightgray.svg" alt="MSRV" /></a>
     <a href="https://discord.gg/gBtUFKR"><img src="https://img.shields.io/discord/490367152054992913.svg" alt="Join the community on Discord" /></a>
     <a href="https://github.com/near/near-sdk-rs/actions"><img src="https://github.com/near/near-sdk-rs/actions/workflows/test.yml/badge.svg" alt="GitHub Actions Build" /></a>
   </p>
@@ -39,17 +40,17 @@
 
 ## Example
 
-Wrap a struct in `#[near_bindgen]` and it generates a smart contract compatible with the NEAR blockchain:
+Wrap a struct in `#[near]` and it generates a smart contract compatible with the NEAR blockchain:
 ```rust
-use near_sdk::{near_bindgen, env};
+use near_sdk::{near, env};
 
-#[near_bindgen]
-#[derive(Default, BorshDeserialize, BorshSerialize)]
+#[near(contract_state)]
+#[derive(Default)]
 pub struct StatusMessage {
     records: HashMap<AccountId, String>,
 }
 
-#[near_bindgen]
+#[near]
 impl StatusMessage {
     pub fn set_status(&mut self, message: String) {
         let account_id = env::signer_account_id();
@@ -95,7 +96,7 @@ to see various usages of cross contract calls, including **system-level actions*
 We can define an initialization method that can be used to initialize the state of the contract. `#[init]` verifies that the contract has not been initialized yet (the contract state doesn't exist) and will panic otherwise.
 
 ```rust
-#[near_bindgen]
+#[near]
 impl StatusMessage {
     #[init]
     pub fn new(user: String, status: String) -> Self {
@@ -117,15 +118,15 @@ impl Default for StatusMessage {
 ```
 You can also prohibit `Default` trait initialization by using `near_sdk::PanicOnDefault` helper macro. E.g.:
 ```rust
-#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(contract_state)]
+#[derive(PanicOnDefault)]
 pub struct StatusMessage {
     records: HashMap<String, String>,
 }
 ```
 
 ### Payable methods
-We can allow methods to accept token transfer together with the function call. This is done so that contracts can define a fee in tokens that needs to be payed when they are used. By the default the methods are not payable and they will panic if someone will attempt to transfer tokens to them during the invocation. This is done for safety reason, in case someone accidentally transfers tokens during the function call.
+We can allow methods to accept token transfer together with the function call. This is done so that contracts can define a fee in tokens that needs to be paid when they are used. By the default the methods are not payable and they will panic if someone will attempt to transfer tokens to them during the invocation. This is done for safety reason, in case someone accidentally transfers tokens during the function call.
 
 To declare a payable method simply use `#[payable]` decorator:
 ```rust
@@ -180,14 +181,13 @@ The general workflow is the following:
 2. Crate needs to have one `pub` struct that will represent the smart contract itself:
     * The struct needs to implement `Default` trait which
     NEAR will use to create the initial state of the contract upon its first usage;
-    * The struct also needs to implement `BorshSerialize` and `BorshDeserialize` traits which NEAR will use to save/load contract's internal state;
 
    Here is an example of a smart contract struct:
    ```rust
-   use near_sdk::{near_bindgen, env};
+   use near_sdk::{near, env};
 
-   #[near_bindgen]
-   #[derive(Default, BorshSerialize, BorshDeserialize)]
+   #[near(contract_state)]
+   #[derive(Default)]
    pub struct MyContract {
        data: HashMap<u64, u64>
    }
@@ -196,12 +196,12 @@ The general workflow is the following:
 3. Define methods that NEAR will expose as smart contract methods:
     * You are free to define any methods for the struct but only public methods will be exposed as smart contract methods;
     * Methods need to use either `&self`, `&mut self`, or `self`;
-    * Decorate the `impl` section with `#[near_bindgen]` macro. That is where all the M.A.G.I.C. (Macros-Auto-Generated Injected Code) happens;
+    * Decorate the `impl` section with `#[near]` macro. That is where all the M.A.G.I.C. (Macros-Auto-Generated Injected Code) happens;
     * If you need to use blockchain interface, e.g. to get the current account id then you can access it with `env::*`;
 
     Here is an example of smart contract methods:
     ```rust
-    #[near_bindgen]
+    #[near]
     impl MyContract {
         pub fn insert_data(&mut self, key: u64, value: u64) -> Option<u64> {
             self.data.insert(key)
@@ -240,17 +240,26 @@ that allows to compile the binary.
 
 **Use [contract-builder](https://github.com/near/near-sdk-rs/tree/master/contract-builder)**
 
+## NEAR contract standards
+
+[`near-contract-standards` crate](https://github.com/near/near-sdk-rs/tree/master/near-contract-standards) provides a set of interfaces and implementations for NEAR's contract standards:
+
+- Upgradability
+- Fungible Token (NEP-141). See [example usage](examples/fungible-token)
+- Non-Fungible Token (NEP-171). See [example usage](examples/non-fungible-token)
+
+
 ## Versioning
 
 ### Semantic Versioning
 
-This crate follows [Cargo's semver guidelines](https://doc.rust-lang.org/cargo/reference/semver.html). 
+This crate follows [Cargo's semver guidelines](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 State breaking changes (low-level serialization format of any data type) will be avoided at all costs. If a change like this were to happen, it would come with a major version and come with a compiler error. If you encounter one that does not, [open an issue](https://github.com/near/near-sdk-rs/issues/new)!
 
 ### MSRV
 
-The minimum supported Rust version is currently `1.56`. There are no guarantees that this will be upheld if a security patch release needs to come in that requires a Rust toolchain increase.
+The minimum supported Rust version is currently `1.72`. There are no guarantees that this will be upheld if a security patch release needs to come in that requires a Rust toolchain increase.
 
 ## Contributing
 

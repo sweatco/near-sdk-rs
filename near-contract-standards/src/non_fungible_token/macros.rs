@@ -1,12 +1,15 @@
 /// The core methods for a basic non-fungible token. Extension standards may be
 /// added in addition to this macro.
 #[macro_export]
+#[deprecated(
+    note = "implement the near_contract_standards::non_fungible_token::NonFungibleTokenCore and near_contract_standards::non_fungible_token::NonFungibleTokenResolver traits manually instead."
+)]
 macro_rules! impl_non_fungible_token_core {
     ($contract: ident, $token: ident) => {
         use $crate::non_fungible_token::core::NonFungibleTokenCore;
         use $crate::non_fungible_token::core::NonFungibleTokenResolver;
 
-        #[near_bindgen]
+        #[near]
         impl NonFungibleTokenCore for $contract {
             #[payable]
             fn nft_transfer(
@@ -36,7 +39,7 @@ macro_rules! impl_non_fungible_token_core {
             }
         }
 
-        #[near_bindgen]
+        #[near]
         impl NonFungibleTokenResolver for $contract {
             #[private]
             fn nft_resolve_transfer(
@@ -60,11 +63,14 @@ macro_rules! impl_non_fungible_token_core {
 /// Non-fungible token approval management allows for an escrow system where
 /// multiple approvals per token exist.
 #[macro_export]
+#[deprecated(
+    note = "implement the near_contract_standards::non_fungible_token::NonFungibleTokenApproval trait manually instead."
+)]
 macro_rules! impl_non_fungible_token_approval {
     ($contract: ident, $token: ident) => {
         use $crate::non_fungible_token::approval::NonFungibleTokenApproval;
 
-        #[near_bindgen]
+        #[near]
         impl NonFungibleTokenApproval for $contract {
             #[payable]
             fn nft_approve(
@@ -101,11 +107,14 @@ macro_rules! impl_non_fungible_token_approval {
 /// Non-fungible enumeration adds the extension standard offering several
 /// view-only methods to get token supply, tokens per owner, etc.
 #[macro_export]
+#[deprecated(
+    note = "implement the near_contract_standards::non_fungible_token::NonFungibleTokenEnumeration trait manually instead."
+)]
 macro_rules! impl_non_fungible_token_enumeration {
     ($contract: ident, $token: ident) => {
         use $crate::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 
-        #[near_bindgen]
+        #[near]
         impl NonFungibleTokenEnumeration for $contract {
             fn nft_total_supply(&self) -> near_sdk::json_types::U128 {
                 self.$token.nft_total_supply()

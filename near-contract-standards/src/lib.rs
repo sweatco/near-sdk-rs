@@ -1,3 +1,6 @@
+// We want to enable all clippy lints, but some of them generate false positives.
+#![allow(clippy::missing_const_for_fn, clippy::redundant_pub_crate)]
+
 /// Fungible tokens as described in [by the spec](https://nomicon.io/Standards/FungibleToken/README.html).
 pub mod fungible_token;
 /// Non-fungible tokens as described in [by the spec](https://nomicon.io/Standards/NonFungibleToken/README.html).
@@ -13,3 +16,5 @@ pub mod storage_management;
 pub mod upgrade;
 
 pub(crate) mod event;
+
+pub mod contract_metadata;

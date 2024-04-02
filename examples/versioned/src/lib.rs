@@ -1,12 +1,10 @@
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::store::UnorderedMap;
-use near_sdk::{env, log, near_bindgen, AccountId, Balance};
+use near_sdk::{env, log, near, AccountId, NearToken};
 
 /// An example of a versioned contract. This is a simple contract that tracks how much
 /// each account deposits into the contract. In v1, a nonce is added to state which increments
 /// after each successful deposit.
-#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize)]
+#[near(contract_state)]
 pub enum VersionedContract {
     V0(ContractV0),
     V1(Contract),
@@ -32,7 +30,7 @@ impl VersionedContract {
         }
     }
 
-    fn funders(&self) -> &UnorderedMap<AccountId, Balance> {
+    fn funders(&self) -> &UnorderedMap<AccountId, NearToken> {
         match self {
             Self::V0(contract) => &contract.funders,
             Self::V1(contract) => &contract.funders,
@@ -46,9 +44,9 @@ impl Default for VersionedContract {
     }
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[near]
 pub struct ContractV0 {
-    funders: UnorderedMap<AccountId, Balance>,
+    funders: UnorderedMap<AccountId, NearToken>,
 }
 
 impl Default for ContractV0 {
@@ -57,9 +55,9 @@ impl Default for ContractV0 {
     }
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[near]
 pub struct Contract {
-    funders: UnorderedMap<AccountId, Balance>,
+    funders: UnorderedMap<AccountId, NearToken>,
     nonce: u64,
 }
 
@@ -69,7 +67,7 @@ impl Default for Contract {
     }
 }
 
-#[near_bindgen]
+#[near]
 impl VersionedContract {
     #[payable]
     pub fn deposit(&mut self) {
@@ -77,7 +75,9 @@ impl VersionedContract {
         let deposit = env::attached_deposit();
         log!("{} deposited {} yNEAR", account_id, deposit);
         let contract = self.contract_mut();
-        *contract.funders.entry(account_id).or_default() += deposit;
+        let res = contract.funders.entry(account_id.clone()).or_default();
+        let res = res.saturating_add(deposit);
+        contract.funders.insert(account_id, res);
         contract.nonce += 1;
     }
 
@@ -88,7 +88,7 @@ impl VersionedContract {
         }
     }
 
-    pub fn get_deposit(&self, account_id: &AccountId) -> Option<&Balance> {
+    pub fn get_deposit(&self, account_id: &AccountId) -> Option<&NearToken> {
         self.funders().get(account_id)
     }
 }
@@ -101,7 +101,7 @@ mod tests {
     use near_sdk::test_utils::VMContextBuilder;
     use near_sdk::testing_env;
 
-    fn set_predecessor_and_deposit(predecessor: AccountId, deposit: Balance) {
+    fn set_predecessor_and_deposit(predecessor: AccountId, deposit: NearToken) {
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(predecessor)
             .attached_deposit(deposit)
@@ -111,17 +111,17 @@ mod tests {
     #[test]
     fn basic() {
         let mut contract = VersionedContract::default();
-        set_predecessor_and_deposit(bob(), 8);
+        set_predecessor_and_deposit(bob(), NearToken::from_yoctonear(8));
         contract.deposit();
 
-        set_predecessor_and_deposit(alice(), 10);
+        set_predecessor_and_deposit(alice(), NearToken::from_yoctonear(10));
         contract.deposit();
 
-        set_predecessor_and_deposit(bob(), 20);
+        set_predecessor_and_deposit(bob(), NearToken::from_yoctonear(20));
         contract.deposit();
 
-        assert_eq!(contract.get_deposit(&alice()), Some(&10));
-        assert_eq!(contract.get_deposit(&bob()), Some(&28));
+        assert_eq!(contract.get_deposit(&alice()), Some(&NearToken::from_yoctonear(10)));
+        assert_eq!(contract.get_deposit(&bob()), Some(&NearToken::from_yoctonear(28)));
         assert_eq!(contract.get_nonce(), 3);
     }
 
@@ -129,18 +129,18 @@ mod tests {
     fn contract_v0_interactions() {
         let mut contract = {
             let mut funders = UnorderedMap::new(b"f");
-            funders.insert(bob(), 8);
+            funders.insert(bob(), NearToken::from_yoctonear(8));
             VersionedContract::V0(ContractV0 { funders })
         };
         assert_eq!(contract.get_nonce(), 0);
         assert!(matches!(contract, VersionedContract::V0(_)));
 
-        set_predecessor_and_deposit(alice(), 1000);
+        set_predecessor_and_deposit(alice(), NearToken::from_yoctonear(1000));
         contract.deposit();
 
         assert!(matches!(contract, VersionedContract::V1(_)));
         assert_eq!(contract.get_nonce(), 1);
-        assert_eq!(contract.get_deposit(&alice()), Some(&1000));
-        assert_eq!(contract.get_deposit(&bob()), Some(&8));
+        assert_eq!(contract.get_deposit(&alice()), Some(&NearToken::from_yoctonear(1000)));
+        assert_eq!(contract.get_deposit(&bob()), Some(&NearToken::from_yoctonear(8)));
     }
 }

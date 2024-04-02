@@ -1,24 +1,80 @@
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::json_types::U128;
-use near_sdk::serde::{Deserialize, Serialize};
-use near_sdk::AccountId;
+use near_sdk::{near, AccountId, NearToken};
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
-#[serde(crate = "near_sdk::serde")]
-#[cfg_attr(feature = "abi", derive(schemars::JsonSchema))]
+#[near(serializers=[borsh, json])]
 pub struct StorageBalance {
-    pub total: U128,
-    pub available: U128,
+    pub total: NearToken,
+    pub available: NearToken,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
-#[serde(crate = "near_sdk::serde")]
-#[cfg_attr(feature = "abi", derive(schemars::JsonSchema))]
+#[near(serializers=[borsh, json])]
 pub struct StorageBalanceBounds {
-    pub min: U128,
-    pub max: Option<U128>,
+    pub min: NearToken,
+    pub max: Option<NearToken>,
 }
 
+/// Ensures that when fungible token storage grows by collections adding entries,
+/// the storage is be paid by the caller. This ensures that storage cannot grow to a point
+/// that the FT contract runs out of Ⓝ.
+/// Takes name of the Contract struct, the inner field for the token and optional method name to
+/// call when the account was closed.
+///
+/// # Examples
+///
+/// ```
+/// use near_sdk::{near, PanicOnDefault, AccountId, NearToken, log};
+/// use near_sdk::collections::LazyOption;
+/// use near_sdk::json_types::U128;
+/// use near_contract_standards::fungible_token::FungibleToken;
+/// use near_contract_standards::storage_management::{
+///     StorageBalance, StorageBalanceBounds, StorageManagement,
+/// };
+/// use near_contract_standards::fungible_token::metadata::FungibleTokenMetadata;
+///
+/// #[near(contract_state)]
+/// #[derive(PanicOnDefault)]
+/// pub struct Contract {
+///     token: FungibleToken,
+///     metadata: LazyOption<FungibleTokenMetadata>,
+/// }
+///
+/// #[near]
+/// impl StorageManagement for Contract {
+///     #[payable]
+///     fn storage_deposit(
+///         &mut self,
+///         account_id: Option<AccountId>,
+///         registration_only: Option<bool>,
+///     ) -> StorageBalance {
+///         self.token.storage_deposit(account_id, registration_only)
+///     }
+///
+///     #[payable]
+///     fn storage_withdraw(&mut self, amount: Option<NearToken>) -> StorageBalance {
+///         self.token.storage_withdraw(amount)
+///     }
+///
+///     #[payable]
+///     fn storage_unregister(&mut self, force: Option<bool>) -> bool {
+///         #[allow(unused_variables)]
+///         if let Some((account_id, balance)) = self.token.internal_storage_unregister(force) {
+///             log!("Closed @{} with {}", account_id, balance);
+///             true
+///         } else {
+///             false
+///         }
+///     }
+///
+///     fn storage_balance_bounds(&self) -> StorageBalanceBounds {
+///         self.token.storage_balance_bounds()
+///     }
+///
+///     fn storage_balance_of(&self, account_id: AccountId) -> Option<StorageBalance> {
+///         self.token.storage_balance_of(account_id)
+///     }
+/// }
+///
+/// ```
+///
 pub trait StorageManagement {
     // if `registration_only=true` MUST refund above the minimum balance if the account didn't exist and
     //     refund full deposit if the account exists.
@@ -42,7 +98,7 @@ pub trait StorageManagement {
     /// function-call access-key call (UX wallet security)
     ///
     /// Returns the StorageBalance structure showing updated balances.
-    fn storage_withdraw(&mut self, amount: Option<U128>) -> StorageBalance;
+    fn storage_withdraw(&mut self, amount: Option<NearToken>) -> StorageBalance;
 
     /// Unregisters the predecessor account and returns the storage NEAR deposit back.
     ///

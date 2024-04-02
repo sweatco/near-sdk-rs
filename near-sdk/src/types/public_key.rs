@@ -1,9 +1,11 @@
-use borsh::{maybestd::io, BorshDeserialize, BorshSerialize};
+use borsh::{BorshDeserialize, BorshSerialize};
 use bs58::decode::Error as B58Error;
-use std::convert::TryFrom;
+use near_sdk_macros::near;
+use std::{convert::TryFrom, io};
 
 /// PublicKey curve
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, Eq, PartialEq, BorshDeserialize, BorshSerialize)]
+#[near(inside_nearsdk, serializers=[borsh(use_discriminant = true)])]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, Eq, PartialEq)]
 #[repr(u8)]
 pub enum CurveType {
     ED25519 = 0,
@@ -42,6 +44,40 @@ impl std::str::FromStr for CurveType {
     }
 }
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "unit-testing"))]
+#[cfg(test)]
+impl TryFrom<PublicKey> for near_crypto::PublicKey {
+    type Error = ParsePublicKeyError;
+
+    fn try_from(public_key: PublicKey) -> Result<Self, Self::Error> {
+        let curve_type = CurveType::from_u8(public_key.data[0])?;
+        let expected_len = curve_type.data_len();
+
+        let key_bytes = public_key.into_bytes();
+        if key_bytes.len() != expected_len + 1 {
+            return Err(ParsePublicKeyError {
+                kind: ParsePublicKeyErrorKind::InvalidLength(key_bytes.len()),
+            });
+        }
+
+        let data = &key_bytes.as_slice()[1..];
+        match curve_type {
+            CurveType::ED25519 => {
+                let public_key = near_crypto::PublicKey::ED25519(
+                    near_crypto::ED25519PublicKey::try_from(data).unwrap(),
+                );
+                Ok(public_key)
+            }
+            CurveType::SECP256K1 => {
+                let public_key = near_crypto::PublicKey::SECP256K1(
+                    near_crypto::Secp256K1PublicKey::try_from(data).unwrap(),
+                );
+                Ok(public_key)
+            }
+        }
+    }
+}
+
 /// Public key in a binary format with base58 string serialization with human-readable curve.
 /// The key types currently supported are `secp256k1` and `ed25519`.
 ///
@@ -76,7 +112,7 @@ impl PublicKey {
         }
     }
 
-    fn from_parts(curve: CurveType, data: Vec<u8>) -> Result<Self, ParsePublicKeyError> {
+    pub fn from_parts(curve: CurveType, data: Vec<u8>) -> Result<Self, ParsePublicKeyError> {
         let expected_length = curve.data_len();
         if data.len() != expected_length {
             return Err(ParsePublicKeyError {
@@ -142,8 +178,8 @@ impl serde::Serialize for PublicKey {
 }
 
 impl BorshDeserialize for PublicKey {
-    fn deserialize(buf: &mut &[u8]) -> io::Result<Self> {
-        <Vec<u8> as BorshDeserialize>::deserialize(buf).and_then(|s| {
+    fn deserialize_reader<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+        <Vec<u8> as BorshDeserialize>::deserialize_reader(reader).and_then(|s| {
             Self::try_from(s).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
@@ -267,7 +303,7 @@ mod tests {
     #[test]
     fn test_public_key_to_string() {
         let key: PublicKey = expected_key();
-        let actual: String = String::try_from(&key).unwrap();
+        let actual: String = String::from(&key);
         assert_eq!(actual, "ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp");
     }
 
@@ -284,9 +320,9 @@ mod tests {
 
         // Test internal serialization of Vec<u8> is the same:
         let old_key = PublicKeyRef(data.clone());
-        let old_encoded_key = old_key.try_to_vec().unwrap();
+        let old_encoded_key = borsh::to_vec(&old_key).unwrap();
         let new_key: PublicKey = data.try_into().unwrap();
-        let new_encoded_key = new_key.try_to_vec().unwrap();
+        let new_encoded_key = borsh::to_vec(&new_key).unwrap();
         assert_eq!(old_encoded_key, new_encoded_key);
         assert_eq!(
             &new_encoded_key,

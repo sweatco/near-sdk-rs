@@ -10,6 +10,9 @@ crate-type = ["cdylib"]
 [dependencies]
 near-sdk = { path = "../../near-sdk" }
 
+[dev-dependencies]
+near-sdk = { path = "../../near-sdk", features = ["unit-testing"] }
+
 [profile.release]
 codegen-units = 1
 # Tell `rustc` to optimize for small code size.
@@ -17,6 +20,3 @@ opt-level = "z"
 lto = true
 debug = false
 panic = "abort"
-
-[workspace]
-members = []

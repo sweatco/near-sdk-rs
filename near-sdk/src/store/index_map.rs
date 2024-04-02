@@ -1,6 +1,7 @@
 use std::fmt;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use near_sdk_macros::near;
 use once_cell::unsync::OnceCell;
 
 use crate::utils::StableMap;
@@ -9,7 +10,7 @@ use crate::{env, CacheEntry, EntryState, IntoStorageKey};
 const ERR_ELEMENT_DESERIALIZATION: &str = "Cannot deserialize element";
 const ERR_ELEMENT_SERIALIZATION: &str = "Cannot serialize element";
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[near(inside_nearsdk)]
 pub(crate) struct IndexMap<T>
 where
     T: BorshSerialize,
@@ -21,7 +22,7 @@ where
     ///
     /// Note: u32 indices are used over usize to have consistent functionality across architectures.
     /// Some functionality would be different from tests to Wasm if exceeding 32-bit length.
-    #[borsh_skip]
+    #[borsh(skip, bound(deserialize = ""))]
     pub(crate) cache: StableMap<u32, OnceCell<CacheEntry<T>>>,
 }
 

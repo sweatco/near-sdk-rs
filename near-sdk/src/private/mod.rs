@@ -5,15 +5,14 @@ pub use near_abi::{
     AbiBorshParameter, AbiFunction, AbiFunctionKind, AbiFunctionModifier, AbiJsonParameter,
     AbiParameters, AbiType,
 };
+#[cfg(feature = "abi")]
+mod result_type_ext;
 
 #[cfg(feature = "abi")]
-pub use schemars;
-
-mod metadata;
-pub use metadata::{Metadata, MethodMetadata};
+pub use result_type_ext::ResultTypeExt;
 
 use crate::IntoStorageKey;
-use borsh::BorshSerialize;
+use borsh::{to_vec, BorshSerialize};
 
 /// Converts a Borsh serializable object into a `Vec<u8>` that is used for a storage key.
 ///
@@ -41,6 +40,6 @@ where
     T: BorshIntoStorageKey,
 {
     fn into_storage_key(self) -> Vec<u8> {
-        self.try_to_vec().unwrap()
+        to_vec(&self).unwrap()
     }
 }

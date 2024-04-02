@@ -6,17 +6,18 @@ use crate::non_fungible_token::events::{NftMint, NftTransfer};
 use crate::non_fungible_token::metadata::TokenMetadata;
 use crate::non_fungible_token::token::{Token, TokenId};
 use crate::non_fungible_token::utils::{refund_approved_account_ids, refund_deposit_to_account};
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::borsh::BorshSerialize;
 use near_sdk::collections::{LookupMap, TreeMap, UnorderedSet};
 use near_sdk::json_types::Base64VecU8;
 use near_sdk::{
-    assert_one_yocto, env, require, AccountId, BorshStorageKey, Gas, IntoStorageKey,
+    assert_one_yocto, env, near, require, AccountId, BorshStorageKey, Gas, IntoStorageKey,
     PromiseOrValue, PromiseResult, StorageUsage,
 };
 use std::collections::HashMap;
+use std::ops::Deref;
 
-const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas(5_000_000_000_000);
-const GAS_FOR_NFT_TRANSFER_CALL: Gas = Gas(25_000_000_000_000 + GAS_FOR_RESOLVE_TRANSFER.0);
+const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas::from_tgas(5);
+const GAS_FOR_NFT_TRANSFER_CALL: Gas = Gas::from_tgas(30);
 
 /// Implementation of the non-fungible token standard.
 /// Allows to include NEP-171 compatible token to any contract.
@@ -27,7 +28,7 @@ const GAS_FOR_NFT_TRANSFER_CALL: Gas = Gas(25_000_000_000_000 + GAS_FOR_RESOLVE_
 ///     - NonFungibleTokenMetadata -- return metadata for the token in NEP-177, up to contract to implement.
 ///
 /// For example usage, see examples/non-fungible-token/src/lib.rs.
-#[derive(BorshDeserialize, BorshSerialize)]
+#[near]
 pub struct NonFungibleToken {
     // owner of contract
     pub owner_id: AccountId,
@@ -50,6 +51,7 @@ pub struct NonFungibleToken {
 }
 
 #[derive(BorshStorageKey, BorshSerialize)]
+#[borsh(crate = "near_sdk::borsh")]
 pub enum StorageKey {
     TokensPerOwner { account_hash: Vec<u8> },
 }
@@ -96,7 +98,7 @@ impl NonFungibleToken {
         let initial_storage_usage = env::storage_usage();
         // 64 Length because this is the max account id length
         let tmp_token_id = "a".repeat(64);
-        let tmp_owner_id = AccountId::new_unchecked("a".repeat(64));
+        let tmp_owner_id = "a".repeat(64).parse().unwrap();
 
         // 1. set some dummy data
         self.owner_by_id.insert(&tmp_token_id, &tmp_owner_id);
@@ -207,13 +209,14 @@ impl NonFungibleToken {
         // clear approvals, if using Approval Management extension
         // this will be rolled back by a panic if sending fails
         let approved_account_ids =
-            self.approvals_by_id.as_mut().and_then(|by_id| by_id.remove(token_id));
+            self.approvals_by_id.as_mut().map(|by_id| by_id.remove(token_id).unwrap_or_default());
 
         // check if authorized
         let sender_id = if sender_id != &owner_id {
-            // if approval extension is NOT being used, or if token has no approved accounts
-            let app_acc_ids =
-                approved_account_ids.as_ref().unwrap_or_else(|| env::panic_str("Unauthorized"));
+            // Panic if approval extension is NOT being used
+            let app_acc_ids = approved_account_ids
+                .as_ref()
+                .unwrap_or_else(|| env::panic_str("Approval extension is disabled"));
 
             // Approval extension is being used; get approval_id for sender.
             let actual_approval_id = app_acc_ids.get(sender_id);
@@ -257,7 +260,7 @@ impl NonFungibleToken {
             old_owner_id: owner_id,
             new_owner_id: receiver_id,
             token_ids: &[token_id],
-            authorized_id: sender_id.filter(|sender_id| *sender_id == owner_id),
+            authorized_id: sender_id.filter(|sender_id| *sender_id == owner_id).map(|f| f.deref()),
             memo: memo.as_deref(),
         }
         .emit();
@@ -396,7 +399,7 @@ impl NonFungibleTokenCore for NonFungibleToken {
             self.internal_transfer(&sender_id, &receiver_id, &token_id, approval_id, memo);
         // Initiating receiver's call and the callback
         ext_nft_receiver::ext(receiver_id.clone())
-            .with_static_gas(env::prepaid_gas() - GAS_FOR_NFT_TRANSFER_CALL)
+            .with_static_gas(env::prepaid_gas().saturating_sub(GAS_FOR_NFT_TRANSFER_CALL))
             .nft_on_transfer(sender_id, old_owner.clone(), token_id.clone(), msg)
             .then(
                 ext_nft_resolver::ext(env::current_account_id())
@@ -428,7 +431,6 @@ impl NonFungibleTokenResolver for NonFungibleToken {
     ) -> bool {
         // Get whether token should be returned
         let must_revert = match env::promise_result(0) {
-            PromiseResult::NotReady => env::abort(),
             PromiseResult::Successful(value) => {
                 if let Ok(yes_or_no) = near_sdk::serde_json::from_slice::<bool>(&value) {
                     yes_or_no
@@ -467,7 +469,7 @@ impl NonFungibleTokenResolver for NonFungibleToken {
         // 1. revert any approvals receiver already set, refunding storage costs
         // 2. reset approvals to what previous owner had set before call to nft_transfer_call
         if let Some(by_id) = &mut self.approvals_by_id {
-            if let Some(receiver_approvals) = by_id.get(&token_id) {
+            if let Some(receiver_approvals) = by_id.remove(&token_id) {
                 refund_approved_account_ids(receiver_id.clone(), &receiver_approvals);
             }
             if let Some(previous_owner_approvals) = approved_account_ids {

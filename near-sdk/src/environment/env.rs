@@ -4,14 +4,15 @@
 //! through `callback_args`, `callback_args_vec`, `ext_contract`, `Promise`, and `PromiseOrValue`.
 
 use std::convert::TryInto;
-use std::mem::size_of;
+use std::mem::{size_of, size_of_val};
 use std::panic as std_panic;
 use std::{convert::TryFrom, mem::MaybeUninit};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "unit-testing"))]
 use crate::mock::MockedBlockchain;
+use crate::promise::Allowance;
 use crate::types::{
-    AccountId, Balance, BlockHeight, Gas, PromiseIndex, PromiseResult, PublicKey, StorageUsage,
+    AccountId, BlockHeight, Gas, NearToken, PromiseIndex, PromiseResult, PublicKey, StorageUsage,
 };
 use crate::{GasWeight, PromiseError};
 use near_sys as sys;
@@ -78,9 +79,9 @@ pub(crate) unsafe fn read_register_fixed_64(register_id: u64) -> [u8; 64] {
 /// low-level blockchain interfacr that implements `BlockchainInterface` trait. In most cases you
 /// want to use `testing_env!` macro to set it.
 ///
-/// ```no_run
+/// ```
 /// # let context = near_sdk::test_utils::VMContextBuilder::new().build();
-/// # let vm_config = near_sdk::VMConfig::test();
+/// # let vm_config = near_sdk::test_vm_config();
 /// # let fees_config = near_sdk::RuntimeFeesConfig::test();
 /// # let storage = Default::default();
 /// # let validators = Default::default();
@@ -219,35 +220,35 @@ pub fn storage_usage() -> StorageUsage {
 // #################
 /// The balance attached to the given account. This includes the attached_deposit that was
 /// attached to the transaction
-pub fn account_balance() -> Balance {
-    let data = [0u8; size_of::<Balance>()];
+pub fn account_balance() -> NearToken {
+    let data = [0u8; size_of::<NearToken>()];
     unsafe { sys::account_balance(data.as_ptr() as u64) };
-    Balance::from_le_bytes(data)
+    NearToken::from_yoctonear(u128::from_le_bytes(data))
 }
 
 /// The balance locked for potential validator staking.
-pub fn account_locked_balance() -> Balance {
-    let data = [0u8; size_of::<Balance>()];
+pub fn account_locked_balance() -> NearToken {
+    let data = [0u8; size_of::<NearToken>()];
     unsafe { sys::account_locked_balance(data.as_ptr() as u64) };
-    Balance::from_le_bytes(data)
+    NearToken::from_yoctonear(u128::from_le_bytes(data))
 }
 
 /// The balance that was attached to the call that will be immediately deposited before the
 /// contract execution starts
-pub fn attached_deposit() -> Balance {
-    let data = [0u8; size_of::<Balance>()];
+pub fn attached_deposit() -> NearToken {
+    let data = [0u8; size_of::<NearToken>()];
     unsafe { sys::attached_deposit(data.as_ptr() as u64) };
-    Balance::from_le_bytes(data)
+    NearToken::from_yoctonear(u128::from_le_bytes(data))
 }
 
 /// The amount of gas attached to the call that can be used to pay for the gas fees.
 pub fn prepaid_gas() -> Gas {
-    Gas(unsafe { sys::prepaid_gas() })
+    Gas::from_gas(unsafe { sys::prepaid_gas() })
 }
 
 /// The gas that was already burnt during the contract execution (cannot exceed `prepaid_gas`)
 pub fn used_gas() -> Gas {
-    Gas(unsafe { sys::used_gas() })
+    Gas::from_gas(unsafe { sys::used_gas() })
 }
 
 // ############
@@ -264,6 +265,52 @@ pub fn random_seed() -> Vec<u8> {
 /// Returns the random seed from the current block. This 32 byte hash is based on the VRF value from
 /// the block. This value is not modified in any way each time this function is called within the
 /// same method/block.
+/// Example of usage:
+/// ```rust
+/// use rand::{Rng, SeedableRng};
+/// use rand_chacha::ChaCha20Rng;
+/// use near_sdk::near;
+/// use near_sdk::env;
+/// #[near(contract_state)]
+/// struct RngExample {
+///    val: i32,
+/// }
+/// #[near]
+/// impl RngExample {
+///     pub fn increment(&mut self) {
+///         let mut rng = ChaCha20Rng::from_seed(env::random_seed_array());
+///         let value = rng.gen_range(0..1011);
+///         self.val += value;
+///     }
+///     pub fn get_value(&mut self) -> i32 {
+///         self.val
+///     }
+/// }
+/// ```
+///
+/// Example of usage with [near-rng](https://lib.rs/crates/near-rng) which allows to decrease size of contract binary:
+///
+/// ```rust
+/// use near_rng::Rng;
+/// use near_sdk::near;
+/// use near_sdk::env;
+/// #[near(contract_state)]
+/// struct NearRngExample {
+///    val: i32,
+/// }
+/// #[near]
+/// impl NearRngExample {
+///     pub fn increment(&mut self) {
+///         let mut rng = Rng::new(&env::random_seed());
+///         let value = rng.rand_range_i32(0, 20);
+///         self.val += value;
+///     }
+///     pub fn get_value(&mut self) -> i32 {
+///         self.val
+///     }
+/// }
+/// ```
+/// More info in [documentation](https://docs.near.org/develop/contracts/security/random)
 pub fn random_seed_array() -> [u8; 32] {
     //* SAFETY: random_seed syscall will always generate 32 bytes inside of the atomic op register
     //*         so the read will have a sufficient buffer of 32, and can transmute from uninit
@@ -391,6 +438,56 @@ pub fn ecrecover(
     }
 }
 
+/// Verifies signature of message using provided ED25519 Public Key
+pub fn ed25519_verify(signature: &[u8; 64], message: &[u8], public_key: &[u8; 32]) -> bool {
+    unsafe {
+        sys::ed25519_verify(
+            signature.len() as _,
+            signature.as_ptr() as _,
+            message.len() as _,
+            message.as_ptr() as _,
+            public_key.len() as _,
+            public_key.as_ptr() as _,
+        ) == 1
+    }
+}
+
+/// Compute alt_bn128 g1 multiexp.
+///
+/// `alt_bn128` is a specific curve from the Barreto-Naehrig(BN) family. It is particularly
+/// well-suited for ZK proofs.
+///
+/// See also: [EIP-196](https://eips.ethereum.org/EIPS/eip-196)
+pub fn alt_bn128_g1_multiexp(value: &[u8]) -> Vec<u8> {
+    unsafe {
+        sys::alt_bn128_g1_multiexp(value.len() as _, value.as_ptr() as _, ATOMIC_OP_REGISTER);
+    };
+    read_register(ATOMIC_OP_REGISTER).expect(REGISTER_EXPECTED_ERR)
+}
+
+/// Compute alt_bn128 g1 sum.
+///
+/// `alt_bn128` is a specific curve from the Barreto-Naehrig(BN) family. It is particularly
+/// well-suited for ZK proofs.
+///
+/// See also: [EIP-196](https://eips.ethereum.org/EIPS/eip-196)
+pub fn alt_bn128_g1_sum(value: &[u8]) -> Vec<u8> {
+    unsafe {
+        sys::alt_bn128_g1_sum(value.len() as _, value.as_ptr() as _, ATOMIC_OP_REGISTER);
+    };
+    read_register(ATOMIC_OP_REGISTER).expect(REGISTER_EXPECTED_ERR)
+}
+
+/// Compute pairing check
+///
+/// `alt_bn128` is a specific curve from the Barreto-Naehrig(BN) family. It is particularly
+/// well-suited for ZK proofs.
+///
+/// See also: [EIP-197](https://eips.ethereum.org/EIPS/eip-197)
+pub fn alt_bn128_pairing_check(value: &[u8]) -> bool {
+    unsafe { sys::alt_bn128_pairing_check(value.len() as _, value.as_ptr() as _) == 1 }
+}
+
 // ################
 // # Promises API #
 // ################
@@ -400,21 +497,21 @@ pub fn promise_create(
     account_id: AccountId,
     function_name: &str,
     arguments: &[u8],
-    amount: Balance,
+    amount: NearToken,
     gas: Gas,
 ) -> PromiseIndex {
     let account_id = account_id.as_bytes();
     unsafe {
-        sys::promise_create(
+        PromiseIndex(sys::promise_create(
             account_id.len() as _,
             account_id.as_ptr() as _,
             function_name.len() as _,
             function_name.as_ptr() as _,
             arguments.len() as _,
             arguments.as_ptr() as _,
-            &amount as *const Balance as _,
-            gas.0,
-        )
+            &amount.as_yoctonear() as *const u128 as _,
+            gas.as_gas(),
+        ))
     }
 }
 
@@ -424,55 +521,61 @@ pub fn promise_then(
     account_id: AccountId,
     function_name: &str,
     arguments: &[u8],
-    amount: Balance,
+    amount: NearToken,
     gas: Gas,
 ) -> PromiseIndex {
     let account_id = account_id.as_bytes();
     unsafe {
-        sys::promise_then(
-            promise_idx,
+        PromiseIndex(sys::promise_then(
+            promise_idx.0,
             account_id.len() as _,
             account_id.as_ptr() as _,
             function_name.len() as _,
             function_name.as_ptr() as _,
             arguments.len() as _,
             arguments.as_ptr() as _,
-            &amount as *const Balance as _,
-            gas.0,
-        )
+            &amount.as_yoctonear() as *const u128 as _,
+            gas.as_gas(),
+        ))
     }
 }
 
 /// Creates a new promise which completes when time all promises passed as arguments complete.
 pub fn promise_and(promise_indices: &[PromiseIndex]) -> PromiseIndex {
-    let mut data = vec![0u8; promise_indices.len() * size_of::<PromiseIndex>()];
+    let mut data = vec![0u8; size_of_val(promise_indices)];
     for i in 0..promise_indices.len() {
         data[i * size_of::<PromiseIndex>()..(i + 1) * size_of::<PromiseIndex>()]
-            .copy_from_slice(&promise_indices[i].to_le_bytes());
+            .copy_from_slice(&promise_indices[i].0.to_le_bytes());
     }
-    unsafe { sys::promise_and(data.as_ptr() as _, promise_indices.len() as _) }
+    unsafe { PromiseIndex(sys::promise_and(data.as_ptr() as _, promise_indices.len() as _)) }
 }
 
 pub fn promise_batch_create(account_id: &AccountId) -> PromiseIndex {
-    let account_id = account_id.as_ref();
-    unsafe { sys::promise_batch_create(account_id.len() as _, account_id.as_ptr() as _) }
+    let account_id: &str = account_id.as_ref();
+    unsafe {
+        PromiseIndex(sys::promise_batch_create(account_id.len() as _, account_id.as_ptr() as _))
+    }
 }
 
 pub fn promise_batch_then(promise_index: PromiseIndex, account_id: &AccountId) -> PromiseIndex {
     let account_id: &str = account_id.as_ref();
     unsafe {
-        sys::promise_batch_then(promise_index, account_id.len() as _, account_id.as_ptr() as _)
+        PromiseIndex(sys::promise_batch_then(
+            promise_index.0,
+            account_id.len() as _,
+            account_id.as_ptr() as _,
+        ))
     }
 }
 
 pub fn promise_batch_action_create_account(promise_index: PromiseIndex) {
-    unsafe { sys::promise_batch_action_create_account(promise_index) }
+    unsafe { sys::promise_batch_action_create_account(promise_index.0) }
 }
 
-pub fn promise_batch_action_deploy_contract(promise_index: u64, code: &[u8]) {
+pub fn promise_batch_action_deploy_contract(promise_index: PromiseIndex, code: &[u8]) {
     unsafe {
         sys::promise_batch_action_deploy_contract(
-            promise_index,
+            promise_index.0,
             code.len() as _,
             code.as_ptr() as _,
         )
@@ -483,18 +586,18 @@ pub fn promise_batch_action_function_call(
     promise_index: PromiseIndex,
     function_name: &str,
     arguments: &[u8],
-    amount: Balance,
+    amount: NearToken,
     gas: Gas,
 ) {
     unsafe {
         sys::promise_batch_action_function_call(
-            promise_index,
+            promise_index.0,
             function_name.len() as _,
             function_name.as_ptr() as _,
             arguments.len() as _,
             arguments.as_ptr() as _,
-            &amount as *const Balance as _,
-            gas.0,
+            &amount.as_yoctonear() as *const u128 as _,
+            gas.as_gas(),
         )
     }
 }
@@ -503,37 +606,42 @@ pub fn promise_batch_action_function_call_weight(
     promise_index: PromiseIndex,
     function_name: &str,
     arguments: &[u8],
-    amount: Balance,
+    amount: NearToken,
     gas: Gas,
     weight: GasWeight,
 ) {
     unsafe {
         sys::promise_batch_action_function_call_weight(
-            promise_index,
+            promise_index.0,
             function_name.len() as _,
             function_name.as_ptr() as _,
             arguments.len() as _,
             arguments.as_ptr() as _,
-            &amount as *const Balance as _,
-            gas.0,
+            &amount.as_yoctonear() as *const u128 as _,
+            gas.as_gas(),
             weight.0,
         )
     }
 }
 
-pub fn promise_batch_action_transfer(promise_index: PromiseIndex, amount: Balance) {
-    unsafe { sys::promise_batch_action_transfer(promise_index, &amount as *const Balance as _) }
+pub fn promise_batch_action_transfer(promise_index: PromiseIndex, amount: NearToken) {
+    unsafe {
+        sys::promise_batch_action_transfer(
+            promise_index.0,
+            &amount.as_yoctonear() as *const u128 as _,
+        )
+    }
 }
 
 pub fn promise_batch_action_stake(
     promise_index: PromiseIndex,
-    amount: Balance,
+    amount: NearToken,
     public_key: &PublicKey,
 ) {
     unsafe {
         sys::promise_batch_action_stake(
-            promise_index,
-            &amount as *const Balance as _,
+            promise_index.0,
+            &amount.as_yoctonear() as *const u128 as _,
             public_key.as_bytes().len() as _,
             public_key.as_bytes().as_ptr() as _,
         )
@@ -546,29 +654,59 @@ pub fn promise_batch_action_add_key_with_full_access(
 ) {
     unsafe {
         sys::promise_batch_action_add_key_with_full_access(
-            promise_index,
+            promise_index.0,
             public_key.as_bytes().len() as _,
             public_key.as_bytes().as_ptr() as _,
             nonce,
         )
     }
 }
+
+/// This is a short lived function while we migrate between the Balance and the allowance type
+pub(crate) fn migrate_to_allowance(allowance: NearToken) -> Allowance {
+    Allowance::limited(allowance).unwrap_or(Allowance::Unlimited)
+}
+
+#[deprecated(since = "5.0.0", note = "Use add_access_key_allowance instead")]
 pub fn promise_batch_action_add_key_with_function_call(
     promise_index: PromiseIndex,
     public_key: &PublicKey,
     nonce: u64,
-    allowance: Balance,
+    allowance: NearToken,
+    receiver_id: &AccountId,
+    function_names: &str,
+) {
+    let allowance = migrate_to_allowance(allowance);
+    promise_batch_action_add_key_allowance_with_function_call(
+        promise_index,
+        public_key,
+        nonce,
+        allowance,
+        receiver_id,
+        function_names,
+    )
+}
+
+pub fn promise_batch_action_add_key_allowance_with_function_call(
+    promise_index: PromiseIndex,
+    public_key: &PublicKey,
+    nonce: u64,
+    allowance: Allowance,
     receiver_id: &AccountId,
     function_names: &str,
 ) {
     let receiver_id: &str = receiver_id.as_ref();
+    let allowance = match allowance {
+        Allowance::Limited(x) => x.get(),
+        Allowance::Unlimited => 0,
+    };
     unsafe {
         sys::promise_batch_action_add_key_with_function_call(
-            promise_index,
+            promise_index.0,
             public_key.as_bytes().len() as _,
             public_key.as_bytes().as_ptr() as _,
             nonce,
-            &allowance as *const Balance as _,
+            &allowance as *const u128 as _,
             receiver_id.len() as _,
             receiver_id.as_ptr() as _,
             function_names.len() as _,
@@ -579,7 +717,7 @@ pub fn promise_batch_action_add_key_with_function_call(
 pub fn promise_batch_action_delete_key(promise_index: PromiseIndex, public_key: &PublicKey) {
     unsafe {
         sys::promise_batch_action_delete_key(
-            promise_index,
+            promise_index.0,
             public_key.as_bytes().len() as _,
             public_key.as_bytes().as_ptr() as _,
         )
@@ -593,7 +731,7 @@ pub fn promise_batch_action_delete_account(
     let beneficiary_id: &str = beneficiary_id.as_ref();
     unsafe {
         sys::promise_batch_action_delete_account(
-            promise_index,
+            promise_index.0,
             beneficiary_id.len() as _,
             beneficiary_id.as_ptr() as _,
         )
@@ -610,7 +748,6 @@ pub fn promise_results_count() -> u64 {
 /// promises that caused the callback.
 pub fn promise_result(result_idx: u64) -> PromiseResult {
     match promise_result_internal(result_idx) {
-        Err(PromiseError::NotReady) => PromiseResult::NotReady,
         Ok(()) => {
             let data = expect_register(read_register(ATOMIC_OP_REGISTER));
             PromiseResult::Successful(data)
@@ -621,7 +758,6 @@ pub fn promise_result(result_idx: u64) -> PromiseResult {
 
 pub(crate) fn promise_result_internal(result_idx: u64) -> Result<(), PromiseError> {
     match unsafe { sys::promise_result(result_idx, ATOMIC_OP_REGISTER) } {
-        0 => Err(PromiseError::NotReady),
         1 => Ok(()),
         2 => Err(PromiseError::Failed),
         _ => abort(),
@@ -630,7 +766,7 @@ pub(crate) fn promise_result_internal(result_idx: u64) -> Result<(), PromiseErro
 /// Consider the execution result of promise under `promise_idx` as execution result of this
 /// function.
 pub fn promise_return(promise_idx: PromiseIndex) {
-    unsafe { sys::promise_return(promise_idx) }
+    unsafe { sys::promise_return(promise_idx.0) }
 }
 
 // ###############
@@ -638,20 +774,20 @@ pub fn promise_return(promise_idx: PromiseIndex) {
 // ###############
 
 /// For a given account return its current stake. If the account is not a validator, returns 0.
-pub fn validator_stake(account_id: &AccountId) -> Balance {
+pub fn validator_stake(account_id: &AccountId) -> NearToken {
     let account_id: &str = account_id.as_ref();
-    let data = [0u8; size_of::<Balance>()];
+    let data = [0u8; size_of::<NearToken>()];
     unsafe {
         sys::validator_stake(account_id.len() as _, account_id.as_ptr() as _, data.as_ptr() as u64)
     };
-    Balance::from_le_bytes(data)
+    NearToken::from_yoctonear(u128::from_le_bytes(data))
 }
 
 /// Returns the total stake of validators in the current epoch.
-pub fn validator_total_stake() -> Balance {
-    let data = [0u8; size_of::<Balance>()];
+pub fn validator_total_stake() -> NearToken {
+    let data = [0u8; size_of::<NearToken>()];
     unsafe { sys::validator_total_stake(data.as_ptr() as u64) };
-    Balance::from_le_bytes(data)
+    NearToken::from_yoctonear(u128::from_le_bytes(data))
 }
 
 // #####################
@@ -786,7 +922,7 @@ pub fn state_read<T: borsh::BorshDeserialize>() -> Option<T> {
 }
 
 pub fn state_write<T: borsh::BorshSerialize>(state: &T) {
-    let data = state.try_to_vec().expect("Cannot serialize the contract state.");
+    let data = borsh::to_vec(state).expect("Cannot serialize the contract state.");
     storage_write(STATE_KEY, &data);
 }
 
@@ -801,10 +937,9 @@ pub fn state_exists() -> bool {
 
 /// Price per 1 byte of storage from mainnet genesis config.
 /// TODO: will be using the host function when it will be available.
-pub const STORAGE_PRICE_PER_BYTE: Balance = 10_000_000_000_000_000_000;
 
-pub fn storage_byte_cost() -> Balance {
-    STORAGE_PRICE_PER_BYTE
+pub fn storage_byte_cost() -> NearToken {
+    NearToken::from_yoctonear(10_000_000_000_000_000_000u128)
 }
 
 // ##################
@@ -934,27 +1069,28 @@ mod tests {
     fn hash_smoke_tests() {
         assert_eq!(
             &super::sha256_array(b"some value"),
-            base64::decode("qz0H8xacy9DtbEtF3iFRn5+TjHLSQSSZiquUnOg7tRs").unwrap().as_slice()
+            hex::decode("ab3d07f3169ccbd0ed6c4b45de21519f9f938c72d24124998aab949ce83bb51b")
+                .unwrap()
+                .as_slice()
         );
 
         assert_eq!(
             &super::keccak256_array(b"some value"),
-            base64::decode("+Sjftfxys7v7mlzLDumEOye0rB68Jab294PiPr1H7x8=").unwrap().as_slice()
+            hex::decode("f928dfb5fc72b3bbfb9a5ccb0ee9843b27b4ac1ebc25a6f6f783e23ebd47ef1f")
+                .unwrap()
+                .as_slice()
         );
 
         assert_eq!(
             &super::keccak512_array(b"some value"),
-            base64::decode(
-                "PjjRQKhRIzdO5j7CCJc6o5uHNJ0XzKyUiiST4YsYtZEyIM0XS09RGql5dwCeFr5IX8\
-                    lPXidDy5uwV501q0EFgw=="
-            )
-            .unwrap()
-            .as_slice()
+            hex::decode("3e38d140a85123374ee63ec208973aa39b87349d17ccac948a2493e18b18b5913220cd174b4f511aa97977009e16be485fc94f5e2743cb9bb0579d35ab410583")
+                .unwrap()
+                .as_slice()
         );
 
         assert_eq!(
             &super::ripemd160_array(b"some value"),
-            base64::decode("CfAl/tcE4eysj4iyvaPlaHbaA6w=").unwrap().as_slice()
+            hex::decode("09f025fed704e1ecac8f88b2bda3e56876da03ac").unwrap().as_slice()
         );
     }
 
@@ -1020,5 +1156,148 @@ mod tests {
             .signer_account_pk(key.clone())
             .build());
         assert_eq!(super::signer_account_pk(), key);
+    }
+
+    #[test]
+    fn ed25519_verify() {
+        const SIGNATURE: [u8; 64] = [
+            145, 193, 203, 18, 114, 227, 14, 117, 33, 213, 121, 66, 130, 14, 25, 4, 36, 120, 46,
+            142, 226, 215, 7, 66, 122, 112, 97, 30, 249, 135, 61, 165, 221, 249, 252, 23, 105, 40,
+            56, 70, 31, 152, 236, 141, 154, 122, 207, 20, 75, 118, 79, 90, 168, 6, 221, 122, 213,
+            29, 126, 196, 216, 104, 191, 6,
+        ];
+
+        const BAD_SIGNATURE: [u8; 64] = [1; 64];
+
+        // create a forged signature with the `s` scalar not properly reduced
+        // https://docs.rs/ed25519/latest/src/ed25519/lib.rs.html#302
+        const FORGED_SIGNATURE: [u8; 64] = {
+            let mut sig = SIGNATURE;
+            sig[63] = 0b1110_0001;
+            sig
+        };
+
+        const PUBLIC_KEY: [u8; 32] = [
+            32, 122, 6, 120, 146, 130, 30, 37, 215, 112, 241, 251, 160, 196, 124, 17, 255, 75, 129,
+            62, 84, 22, 46, 206, 158, 184, 57, 224, 118, 35, 26, 182,
+        ];
+
+        // create a forged public key to force a PointDecompressionError
+        // https://docs.rs/ed25519-dalek/latest/src/ed25519_dalek/public.rs.html#142
+        const FORGED_PUBLIC_KEY: [u8; 32] = {
+            let mut key = PUBLIC_KEY;
+            key[31] = 0b1110_0001;
+            key
+        };
+
+        // 32 bytes message
+        const MESSAGE: [u8; 32] = [
+            107, 97, 106, 100, 108, 102, 107, 106, 97, 108, 107, 102, 106, 97, 107, 108, 102, 106,
+            100, 107, 108, 97, 100, 106, 102, 107, 108, 106, 97, 100, 115, 107,
+        ];
+
+        assert!(super::ed25519_verify(&SIGNATURE, &MESSAGE, &PUBLIC_KEY));
+        assert!(!super::ed25519_verify(&BAD_SIGNATURE, &MESSAGE, &FORGED_PUBLIC_KEY));
+        assert!(!super::ed25519_verify(&SIGNATURE, &MESSAGE, &FORGED_PUBLIC_KEY));
+        assert!(!super::ed25519_verify(&FORGED_SIGNATURE, &MESSAGE, &PUBLIC_KEY));
+    }
+
+    #[test]
+    pub fn alt_bn128_g1_multiexp() {
+        // Originated from https://github.com/near/nearcore/blob/8cd095ffc98a6507ed2d2a8982a6a3e42ebc1b62/runtime/near-test-contracts/estimator-contract/src/lib.rs#L557-L720
+        let buffer = [
+            16, 238, 91, 161, 241, 22, 172, 158, 138, 252, 202, 212, 136, 37, 110, 231, 118, 220,
+            8, 45, 14, 153, 125, 217, 227, 87, 238, 238, 31, 138, 226, 8, 238, 185, 12, 155, 93,
+            126, 144, 248, 200, 177, 46, 245, 40, 162, 169, 80, 150, 211, 157, 13, 10, 36, 44, 232,
+            173, 32, 32, 115, 123, 2, 9, 47, 190, 148, 181, 91, 69, 6, 83, 40, 65, 222, 251, 70,
+            81, 73, 60, 142, 130, 217, 176, 20, 69, 75, 40, 167, 41, 180, 244, 5, 142, 215, 135,
+            35,
+        ];
+
+        assert_eq!(
+            super::alt_bn128_g1_multiexp(&buffer),
+            vec![
+                150, 94, 159, 52, 239, 226, 181, 150, 77, 86, 90, 186, 102, 219, 243, 204, 36, 128,
+                164, 209, 106, 6, 62, 124, 235, 104, 223, 195, 30, 204, 42, 20, 13, 158, 14, 197,
+                133, 73, 43, 171, 28, 68, 82, 116, 244, 164, 36, 251, 244, 8, 234, 40, 118, 55,
+                216, 187, 242, 39, 213, 160, 192, 184, 28, 23
+            ]
+        );
+    }
+
+    #[test]
+    pub fn alt_bn128_g1_sum() {
+        // Originated from https://github.com/near/nearcore/blob/8cd095ffc98a6507ed2d2a8982a6a3e42ebc1b62/runtime/near-test-contracts/estimator-contract/src/lib.rs#L557-L720
+        let buffer = [
+            0, 11, 49, 94, 29, 152, 111, 116, 138, 248, 2, 184, 8, 159, 80, 169, 45, 149, 48, 32,
+            49, 37, 6, 133, 105, 171, 194, 120, 44, 195, 17, 180, 35, 137, 154, 4, 192, 211, 244,
+            93, 200, 2, 44, 0, 64, 26, 108, 139, 147, 88, 235, 242, 23, 253, 52, 110, 236, 67, 99,
+            176, 2, 186, 198, 228, 25,
+        ];
+
+        assert_eq!(
+            super::alt_bn128_g1_sum(&buffer),
+            vec![
+                11, 49, 94, 29, 152, 111, 116, 138, 248, 2, 184, 8, 159, 80, 169, 45, 149, 48, 32,
+                49, 37, 6, 133, 105, 171, 194, 120, 44, 195, 17, 180, 35, 137, 154, 4, 192, 211,
+                244, 93, 200, 2, 44, 0, 64, 26, 108, 139, 147, 88, 235, 242, 23, 253, 52, 110, 236,
+                67, 99, 176, 2, 186, 198, 228, 25
+            ]
+        );
+    }
+
+    #[test]
+    pub fn alt_bn128_pairing_check() {
+        // Taken from https://github.com/near/nearcore/blob/8cd095ffc98a6507ed2d2a8982a6a3e42ebc1b62/runtime/near-vm-runner/src/logic/tests/alt_bn128.rs#L239-L250
+        let valid_pair = [
+            117, 10, 217, 99, 113, 78, 234, 67, 183, 90, 26, 58, 200, 86, 195, 123, 42, 184, 213,
+            88, 224, 248, 18, 200, 108, 6, 181, 6, 28, 17, 99, 7, 36, 134, 53, 115, 192, 180, 3,
+            113, 76, 227, 174, 147, 50, 174, 79, 74, 151, 195, 172, 10, 211, 210, 26, 92, 117, 246,
+            65, 237, 168, 104, 16, 4, 1, 26, 3, 219, 6, 13, 193, 115, 77, 230, 27, 13, 242, 214,
+            195, 9, 213, 99, 135, 12, 160, 202, 114, 135, 175, 42, 116, 172, 79, 234, 26, 41, 212,
+            111, 192, 129, 124, 112, 57, 107, 38, 244, 230, 222, 240, 36, 65, 238, 133, 188, 19,
+            43, 148, 59, 205, 40, 161, 179, 173, 228, 88, 169, 231, 29, 17, 67, 163, 51, 165, 187,
+            101, 44, 250, 24, 68, 101, 92, 128, 203, 190, 51, 85, 9, 43, 58, 136, 68, 180, 92, 110,
+            185, 168, 107, 129, 45, 30, 187, 22, 100, 17, 75, 93, 216, 125, 23, 212, 11, 186, 199,
+            204, 1, 140, 133, 11, 82, 44, 65, 222, 20, 26, 48, 26, 132, 220, 25, 213, 93, 25, 79,
+            176, 4, 149, 151, 243, 11, 131, 253, 233, 121, 38, 222, 15, 118, 117, 200, 214, 175,
+            233, 130, 181, 193, 167, 255, 153, 169, 240, 207, 235, 28, 31, 83, 74, 69, 179, 6, 150,
+            72, 67, 74, 166, 130, 83, 82, 115, 123, 111, 208, 221, 64, 43, 237, 213, 186, 235, 7,
+            56, 251, 179, 95, 233, 159, 23, 109, 173, 85, 103, 8, 165, 235, 226, 218, 79, 72, 120,
+            172, 251, 20, 83, 121, 201, 140, 98, 170, 246, 121, 218, 19, 115, 42, 135, 60, 239, 30,
+            32, 49, 170, 171, 204, 196, 197, 160, 158, 168, 47, 23, 110, 139, 123, 222, 222, 245,
+            98, 125, 208, 70, 39, 110, 186, 146, 254, 66, 185, 118, 3, 78, 32, 47, 179, 197, 93,
+            79, 240, 204, 78, 236, 133, 213, 173, 117, 94, 63, 154, 68, 89, 236, 138, 0, 247, 242,
+            212, 245, 33, 249, 0, 35, 246, 233, 0, 124, 86, 198, 162, 201, 54, 19, 26, 196, 75,
+            254, 71, 70, 238, 51, 2, 23, 185, 152, 139, 134, 65, 107, 129, 114, 244, 47, 251, 240,
+            80, 193, 23,
+        ];
+        assert!(super::alt_bn128_pairing_check(&valid_pair));
+
+        // Taken from https://github.com/near/nearcore/blob/8cd095ffc98a6507ed2d2a8982a6a3e42ebc1b62/runtime/near-vm-runner/src/logic/tests/alt_bn128.rs#L254-L265
+        let invalid_pair = [
+            117, 10, 217, 99, 113, 78, 234, 67, 183, 90, 26, 58, 200, 86, 195, 123, 42, 184, 213,
+            88, 224, 248, 18, 200, 108, 6, 181, 6, 28, 17, 99, 7, 36, 134, 53, 115, 192, 180, 3,
+            113, 76, 227, 174, 147, 50, 174, 79, 74, 151, 195, 172, 10, 211, 210, 26, 92, 117, 246,
+            65, 237, 168, 104, 16, 4, 1, 26, 3, 219, 6, 13, 193, 115, 77, 230, 27, 13, 242, 214,
+            195, 9, 213, 99, 135, 12, 160, 202, 114, 135, 175, 42, 116, 172, 79, 234, 26, 41, 212,
+            111, 192, 129, 124, 112, 57, 107, 38, 244, 230, 222, 240, 36, 65, 238, 133, 188, 19,
+            43, 148, 59, 205, 40, 161, 179, 173, 228, 88, 169, 231, 29, 17, 67, 163, 51, 165, 187,
+            101, 44, 250, 24, 68, 101, 92, 128, 203, 190, 51, 85, 9, 43, 58, 136, 68, 180, 92, 110,
+            185, 168, 107, 129, 45, 30, 187, 22, 100, 17, 75, 93, 216, 125, 23, 212, 11, 186, 199,
+            204, 1, 140, 133, 11, 82, 44, 65, 222, 20, 26, 48, 26, 132, 220, 25, 213, 93, 25, 117,
+            10, 217, 99, 113, 78, 234, 67, 183, 90, 26, 58, 200, 86, 195, 123, 42, 184, 213, 88,
+            224, 248, 18, 200, 108, 6, 181, 6, 28, 17, 99, 7, 36, 134, 53, 115, 192, 180, 3, 113,
+            76, 227, 174, 147, 50, 174, 79, 74, 151, 195, 172, 10, 211, 210, 26, 92, 117, 246, 65,
+            237, 168, 104, 16, 4, 109, 173, 85, 103, 8, 165, 235, 226, 218, 79, 72, 120, 172, 251,
+            20, 83, 121, 201, 140, 98, 170, 246, 121, 218, 19, 115, 42, 135, 60, 239, 30, 32, 49,
+            170, 171, 204, 196, 197, 160, 158, 168, 47, 23, 110, 139, 123, 222, 222, 245, 98, 125,
+            208, 70, 39, 110, 186, 146, 254, 66, 185, 118, 3, 78, 32, 47, 179, 197, 93, 79, 240,
+            204, 78, 236, 133, 213, 173, 117, 94, 63, 154, 68, 89, 236, 138, 0, 247, 242, 212, 245,
+            33, 249, 0, 35, 246, 233, 0, 124, 86, 198, 162, 201, 54, 19, 26, 196, 75, 254, 71, 70,
+            238, 51, 2, 23, 185, 152, 139, 134, 65, 107, 129, 114, 244, 47, 251, 240, 80, 193, 23,
+        ];
+
+        assert!(!super::alt_bn128_pairing_check(&invalid_pair));
     }
 }

@@ -1,9 +1,11 @@
 #[cfg(all(not(target_arch = "wasm32"), feature = "unit-testing"))]
-pub use near_vm_logic::types::{PromiseResult as VmPromiseResult, ReturnData};
+pub use near_vm_runner::logic::types::{PromiseResult as VmPromiseResult, ReturnData};
 
 //* Types from near_vm_logic
 /// Promise index that is computed only once.
-pub type PromiseIndex = u64;
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Copy, Clone)]
+pub struct PromiseIndex(pub(crate) u64);
+
 /// An index of Receipt to append an action
 #[deprecated(since = "4.1.0", note = "type not used within SDK, use u64 directly or another alias")]
 pub type ReceiptIndex = u64;
@@ -14,8 +16,6 @@ pub type IteratorIndex = u64;
 /// calls are available to the contract invoked through the callback.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PromiseResult {
-    /// Current version of the protocol never returns `PromiseResult::NotReady`.
-    NotReady,
     Successful(Vec<u8>),
     Failed,
 }
@@ -24,7 +24,6 @@ pub enum PromiseResult {
 impl From<PromiseResult> for VmPromiseResult {
     fn from(p: PromiseResult) -> Self {
         match p {
-            PromiseResult::NotReady => Self::NotReady,
             PromiseResult::Successful(v) => Self::Successful(v),
             PromiseResult::Failed => Self::Failed,
         }
@@ -37,6 +36,4 @@ impl From<PromiseResult> for VmPromiseResult {
 pub enum PromiseError {
     /// Promise result failed.
     Failed,
-    /// Current version of the protocol never returns this variant.
-    NotReady,
 }

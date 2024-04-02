@@ -1,24 +1,25 @@
 //! Rust contract that uses conditional compilation.
 
-use near_sdk::near_bindgen;
-use borsh::{BorshDeserialize, BorshSerialize};
+use near_sdk::near;
 
-#[near_bindgen]
-#[derive(Default, BorshDeserialize, BorshSerialize)]
+#[near(contract_state)]
+#[derive(Default)]
 struct Incrementer {
     value: u32,
 }
 
-#[near_bindgen]
+#[near]
 impl Incrementer {
     #[cfg(feature = "myfeature")]
+    #[init]
     pub fn new() -> Self {
-        Self {value: 0}
+        Self { value: 0 }
     }
 
     #[cfg(not(feature = "myfeature"))]
+    #[init]
     pub fn new() -> Self {
-        Self {value: 1}
+        Self { value: 1 }
     }
 
     #[cfg(feature = "myfeature")]

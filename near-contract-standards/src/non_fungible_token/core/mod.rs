@@ -19,6 +19,36 @@ use near_sdk::PromiseOrValue;
 /// understand how the cross-contract call work.
 ///
 /// [core non-fungible token standard]: <https://nomicon.io/Standards/NonFungibleToken/Core.html>
+///
+/// # Examples
+///
+/// ```
+/// use near_sdk::{PanicOnDefault, AccountId, PromiseOrValue, near};
+/// use near_contract_standards::non_fungible_token::{core::NonFungibleTokenCore, NonFungibleToken, TokenId, Token};
+///
+/// #[near(contract_state)]
+/// #[derive(PanicOnDefault)]
+/// pub struct Contract {
+///    tokens: NonFungibleToken,
+///}
+/// #[near]
+/// impl NonFungibleTokenCore for Contract {
+///     #[payable]
+///    fn nft_transfer(&mut self, receiver_id: AccountId, token_id: TokenId, approval_id: Option<u64>, memo: Option<String>) {
+///        self.tokens.nft_transfer(receiver_id, token_id, approval_id, memo);
+///    }
+///
+///    #[payable]
+///    fn nft_transfer_call(&mut self, receiver_id: AccountId, token_id: TokenId, approval_id: Option<u64>, memo: Option<String>, msg: String) -> PromiseOrValue<bool> {
+///        self.tokens.nft_transfer_call(receiver_id, token_id, approval_id, memo, msg)
+///    }
+///
+///    fn nft_token(&self, token_id: TokenId) -> Option<Token> {
+///        self.tokens.nft_token(token_id)
+///    }
+///}
+/// ```
+///
 pub trait NonFungibleTokenCore {
     /// Simple transfer. Transfer a given `token_id` from current owner to
     /// `receiver_id`.

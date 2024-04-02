@@ -1,19 +1,21 @@
 use super::AttrSigInfo;
+use crate::core_impl::utils;
+use proc_macro2::TokenStream as TokenStream2;
 use syn::spanned::Spanned;
-use syn::{Error, LitStr, TraitItemMethod};
+use syn::{Error, LitStr, TraitItemFn};
 
 /// Information extracted from trait method.
 pub struct TraitItemMethodInfo {
     /// Attributes and signature information.
     pub attr_sig_info: AttrSigInfo,
     /// The original AST of the trait item method.
-    pub original: TraitItemMethod,
+    pub original: TraitItemFn,
     /// String representation of method name, e.g. `"my_method"`.
     pub ident_byte_str: LitStr,
 }
 
 impl TraitItemMethodInfo {
-    pub fn new(original: &mut TraitItemMethod) -> syn::Result<Self> {
+    pub fn new(original: &mut TraitItemFn, trait_name: &TokenStream2) -> syn::Result<Self> {
         if original.default.is_some() {
             return Err(Error::new(
                 original.span(),
@@ -23,9 +25,10 @@ impl TraitItemMethodInfo {
             ));
         }
 
-        let TraitItemMethod { attrs, sig, .. } = original;
+        let TraitItemFn { attrs, sig, .. } = original;
 
-        let attr_sig_info = AttrSigInfo::new(attrs, sig)?;
+        utils::sig_is_supported(sig)?;
+        let attr_sig_info = AttrSigInfo::new(attrs, sig, trait_name)?;
 
         let ident_byte_str =
             LitStr::new(&attr_sig_info.ident.to_string(), attr_sig_info.ident.span());

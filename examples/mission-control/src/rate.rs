@@ -1,11 +1,10 @@
 use crate::account::*;
 use crate::asset::*;
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use near_sdk::near;
 
-#[derive(PartialEq, Eq, Serialize, Deserialize, BorshDeserialize, BorshSerialize)]
-#[serde(crate = "near_sdk::serde")]
+#[derive(PartialEq, Eq)]
+#[near(serializers = [json, borsh])]
 pub struct Rate {
     pub credit: HashMap<Asset, Quantity>,
     pub debit: HashMap<Asset, Quantity>,

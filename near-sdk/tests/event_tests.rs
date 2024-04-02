@@ -1,7 +1,7 @@
 use near_sdk::test_utils::get_logs;
-use near_sdk::{near_bindgen, AccountId};
+use near_sdk::{near, AccountId};
 
-#[near_bindgen(event_json(standard = "test_standard", random = "random"), other_random)]
+#[near(event_json(standard = "test_standard"))]
 pub enum TestEvents<'a, 'b, T>
 where
     T: near_sdk::serde::Serialize,
@@ -22,10 +22,14 @@ where
     LifetimeTestB(&'b str),
 }
 
-#[near_bindgen(event_json(standard = "another_standard"))]
-pub enum AnotherEvent {
-    #[event_version("1.0.0")]
-    Test,
+mod private {
+    use super::*;
+
+    #[near(event_json(standard = "another_standard"))]
+    pub enum AnotherEvent {
+        #[event_version("1.0.0")]
+        Test,
+    }
 }
 
 #[test]
@@ -45,7 +49,7 @@ fn test_json_emit() {
 
     TestEvents::LifetimeTestB::<String>("lifetime_b").emit();
 
-    AnotherEvent::Test.emit();
+    private::AnotherEvent::Test.emit();
 
     let logs = get_logs();
 

@@ -1,10 +1,33 @@
+#[cfg(feature = "abi")]
 use borsh::BorshSchema;
 use std::cell::RefCell;
-use std::collections::HashMap;
+#[cfg(feature = "abi")]
+use std::collections::BTreeMap;
 use std::io::{Error, Write};
+use std::num::NonZeroU128;
 use std::rc::Rc;
 
-use crate::{AccountId, Balance, Gas, GasWeight, PromiseIndex, PublicKey};
+use crate::env::migrate_to_allowance;
+use crate::{AccountId, Gas, GasWeight, NearToken, PromiseIndex, PublicKey};
+
+/// Allow an access key to spend either an unlimited or limited amount of gas
+// This wrapper prevents incorrect construction
+#[derive(Clone, Copy)]
+pub enum Allowance {
+    Unlimited,
+    Limited(NonZeroU128),
+}
+
+impl Allowance {
+    pub fn unlimited() -> Allowance {
+        Allowance::Unlimited
+    }
+
+    /// This will return an None if you try to pass a zero value balance
+    pub fn limited(balance: NearToken) -> Option<Allowance> {
+        NonZeroU128::new(balance.as_yoctonear()).map(Allowance::Limited)
+    }
+}
 
 enum PromiseAction {
     CreateAccount,
@@ -14,21 +37,21 @@ enum PromiseAction {
     FunctionCall {
         function_name: String,
         arguments: Vec<u8>,
-        amount: Balance,
+        amount: NearToken,
         gas: Gas,
     },
     FunctionCallWeight {
         function_name: String,
         arguments: Vec<u8>,
-        amount: Balance,
+        amount: NearToken,
         gas: Gas,
         weight: GasWeight,
     },
     Transfer {
-        amount: Balance,
+        amount: NearToken,
     },
     Stake {
-        amount: Balance,
+        amount: NearToken,
         public_key: PublicKey,
     },
     AddFullAccessKey {
@@ -37,7 +60,7 @@ enum PromiseAction {
     },
     AddAccessKey {
         public_key: PublicKey,
-        allowance: Balance,
+        allowance: Allowance,
         receiver_id: AccountId,
         function_names: String,
         nonce: u64,
@@ -91,7 +114,7 @@ impl PromiseAction {
                 )
             }
             AddAccessKey { public_key, allowance, receiver_id, function_names, nonce } => {
-                crate::env::promise_batch_action_add_key_with_function_call(
+                crate::env::promise_batch_action_add_key_allowance_with_function_call(
                     promise_index,
                     public_key,
                     *nonce,
@@ -169,18 +192,17 @@ impl PromiseJoint {
 ///   execution of method `ContractB::b` of `bob_near` account, and the return value of `ContractA::a`
 ///   will be what `ContractB::b` returned.
 /// ```no_run
-/// # use near_sdk::{ext_contract, near_bindgen, Promise, Gas};
-/// # use borsh::{BorshDeserialize, BorshSerialize};
+/// # use near_sdk::{ext_contract, near, Promise, Gas};
 /// #[ext_contract]
 /// pub trait ContractB {
 ///     fn b(&mut self);
 /// }
 ///
-/// #[near_bindgen]
-/// #[derive(Default, BorshDeserialize, BorshSerialize)]
+/// #[near(contract_state)]
+/// #[derive(Default)]
 /// struct ContractA {}
 ///
-/// #[near_bindgen]
+/// #[near]
 /// impl ContractA {
 ///     pub fn a(&self) -> Promise {
 ///         contract_b::ext("bob_near".parse().unwrap()).b()
@@ -192,12 +214,12 @@ impl PromiseJoint {
 ///   schedules a transaction that creates an account, transfers tokens, and assigns a public key:
 ///
 /// ```no_run
-/// # use near_sdk::{Promise, env, test_utils::VMContextBuilder, testing_env};
+/// # use near_sdk::{Promise, env, test_utils::VMContextBuilder, testing_env, Gas, NearToken};
 /// # testing_env!(VMContextBuilder::new().signer_account_id("bob_near".parse().unwrap())
-/// #               .account_balance(1000).prepaid_gas(1_000_000.into()).build());
+/// #               .account_balance(NearToken::from_yoctonear(1000)).prepaid_gas(Gas::from_gas(1_000_000)).build());
 /// Promise::new("bob_near".parse().unwrap())
 ///   .create_account()
-///   .transfer(1000)
+///   .transfer(NearToken::from_yoctonear(1000))
 ///   .add_full_access_key(env::signer_account_pk());
 /// ```
 pub struct Promise {
@@ -206,9 +228,10 @@ pub struct Promise {
 }
 
 /// Until we implement strongly typed promises we serialize them as unit struct.
+#[cfg(feature = "abi")]
 impl BorshSchema for Promise {
     fn add_definitions_recursively(
-        definitions: &mut HashMap<borsh::schema::Declaration, borsh::schema::Definition>,
+        definitions: &mut BTreeMap<borsh::schema::Declaration, borsh::schema::Definition>,
     ) {
         <()>::add_definitions_recursively(definitions);
     }
@@ -263,7 +286,7 @@ impl Promise {
         self,
         function_name: String,
         arguments: Vec<u8>,
-        amount: Balance,
+        amount: NearToken,
         gas: Gas,
     ) -> Self {
         self.add_action(PromiseAction::FunctionCall { function_name, arguments, amount, gas })
@@ -276,7 +299,7 @@ impl Promise {
         self,
         function_name: String,
         arguments: Vec<u8>,
-        amount: Balance,
+        amount: NearToken,
         gas: Gas,
         weight: GasWeight,
     ) -> Self {
@@ -290,12 +313,12 @@ impl Promise {
     }
 
     /// Transfer tokens to the account that this promise acts on.
-    pub fn transfer(self, amount: Balance) -> Self {
+    pub fn transfer(self, amount: NearToken) -> Self {
         self.add_action(PromiseAction::Transfer { amount })
     }
 
     /// Stake the account for the given amount of tokens using the given public key.
-    pub fn stake(self, amount: Balance, public_key: PublicKey) -> Self {
+    pub fn stake(self, amount: NearToken, public_key: PublicKey) -> Self {
         self.add_action(PromiseAction::Stake { amount, public_key })
     }
 
@@ -312,21 +335,39 @@ impl Promise {
     /// Add an access key that is restricted to only calling a smart contract on some account using
     /// only a restricted set of methods. Here `function_names` is a comma separated list of methods,
     /// e.g. `"method_a,method_b".to_string()`.
-    pub fn add_access_key(
+    pub fn add_access_key_allowance(
         self,
         public_key: PublicKey,
-        allowance: Balance,
+        allowance: Allowance,
         receiver_id: AccountId,
         function_names: String,
     ) -> Self {
-        self.add_access_key_with_nonce(public_key, allowance, receiver_id, function_names, 0)
+        self.add_access_key_allowance_with_nonce(
+            public_key,
+            allowance,
+            receiver_id,
+            function_names,
+            0,
+        )
+    }
+
+    #[deprecated(since = "5.0.0", note = "Use add_access_key_allowance instead")]
+    pub fn add_access_key(
+        self,
+        public_key: PublicKey,
+        allowance: NearToken,
+        receiver_id: AccountId,
+        function_names: String,
+    ) -> Self {
+        let allowance = migrate_to_allowance(allowance);
+        self.add_access_key_allowance(public_key, allowance, receiver_id, function_names)
     }
 
     /// Add an access key with a provided nonce.
-    pub fn add_access_key_with_nonce(
+    pub fn add_access_key_allowance_with_nonce(
         self,
         public_key: PublicKey,
-        allowance: Balance,
+        allowance: Allowance,
         receiver_id: AccountId,
         function_names: String,
         nonce: u64,
@@ -338,6 +379,25 @@ impl Promise {
             function_names,
             nonce,
         })
+    }
+
+    #[deprecated(since = "5.0.0", note = "Use add_access_key_allowance_with_nonce instead")]
+    pub fn add_access_key_with_nonce(
+        self,
+        public_key: PublicKey,
+        allowance: NearToken,
+        receiver_id: AccountId,
+        function_names: String,
+        nonce: u64,
+    ) -> Self {
+        let allowance = migrate_to_allowance(allowance);
+        self.add_access_key_allowance_with_nonce(
+            public_key,
+            allowance,
+            receiver_id,
+            function_names,
+            nonce,
+        )
     }
 
     /// Delete access key from the given account.
@@ -408,18 +468,17 @@ impl Promise {
     ///
     /// In the below code `a1` and `a2` functions are equivalent.
     /// ```
-    /// # use near_sdk::{ext_contract, Gas, near_bindgen, Promise};
-    /// # use borsh::{BorshDeserialize, BorshSerialize};
+    /// # use near_sdk::{ext_contract, Gas, near, Promise};
     /// #[ext_contract]
     /// pub trait ContractB {
     ///     fn b(&mut self);
     /// }
     ///
-    /// #[near_bindgen]
-    /// #[derive(Default, BorshDeserialize, BorshSerialize)]
+    /// #[near(contract_state)]
+    /// #[derive(Default)]
     /// struct ContractA {}
     ///
-    /// #[near_bindgen]
+    /// #[near]
     /// impl ContractA {
     ///     pub fn a1(&self) {
     ///        contract_b::ext("bob_near".parse().unwrap()).b().as_return();
@@ -491,7 +550,7 @@ impl schemars::JsonSchema for Promise {
 /// or `PromiseOrValue::Value` to specify which one should be returned.
 /// # Example
 /// ```no_run
-/// # use near_sdk::{ext_contract, near_bindgen, Gas, PromiseOrValue};
+/// # use near_sdk::{ext_contract, near, Gas, PromiseOrValue};
 /// #[ext_contract]
 /// pub trait ContractA {
 ///     fn a(&mut self);
@@ -511,12 +570,13 @@ pub enum PromiseOrValue<T> {
     Value(T),
 }
 
+#[cfg(feature = "abi")]
 impl<T> BorshSchema for PromiseOrValue<T>
 where
     T: BorshSchema,
 {
     fn add_definitions_recursively(
-        definitions: &mut HashMap<borsh::schema::Declaration, borsh::schema::Definition>,
+        definitions: &mut BTreeMap<borsh::schema::Declaration, borsh::schema::Definition>,
     ) {
         T::add_definitions_recursively(definitions);
     }
@@ -551,5 +611,235 @@ impl<T: schemars::JsonSchema> schemars::JsonSchema for PromiseOrValue<T> {
 
     fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
         T::json_schema(gen)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod tests {
+    use crate::mock::MockAction;
+    use crate::test_utils::get_created_receipts;
+    use crate::test_utils::test_env::{alice, bob};
+    use crate::{
+        test_utils::VMContextBuilder, testing_env, AccountId, Allowance, NearToken, Promise,
+        PublicKey,
+    };
+
+    fn pk() -> PublicKey {
+        "ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp".parse().unwrap()
+    }
+
+    fn get_actions() -> std::vec::IntoIter<MockAction> {
+        let receipts = get_created_receipts();
+        let first_receipt = receipts.into_iter().next().unwrap();
+        first_receipt.actions.into_iter()
+    }
+
+    fn has_add_key_with_full_access(public_key: PublicKey, nonce: Option<u64>) -> bool {
+        let public_key = near_crypto::PublicKey::try_from(public_key).unwrap();
+        get_actions().any(|el| {
+            matches!(
+                el,
+                MockAction::AddKeyWithFullAccess { public_key: p, nonce: n, receipt_index: _, }
+                if p == public_key
+                    && (nonce.is_none() || Some(n) == nonce)
+            )
+        })
+    }
+
+    fn has_add_key_with_function_call(
+        public_key: PublicKey,
+        allowance: u128,
+        receiver_id: AccountId,
+        function_names: String,
+        nonce: Option<u64>,
+    ) -> bool {
+        let public_key = near_crypto::PublicKey::try_from(public_key).unwrap();
+        get_actions().any(|el| {
+            matches!(
+                el,
+                MockAction::AddKeyWithFunctionCall {
+                    public_key: p,
+                    allowance: a,
+                    receiver_id: r,
+                    method_names,
+                    nonce: n,
+                    receipt_index: _,
+                }
+                if p == public_key
+                    && a.unwrap() == NearToken::from_yoctonear(allowance)
+                    && r == receiver_id
+                    && method_names.clone() == function_names.split(',').collect::<Vec<_>>()
+                    && (nonce.is_none() || Some(n) == nonce)
+            )
+        })
+    }
+
+    #[test]
+    fn test_add_full_access_key() {
+        testing_env!(VMContextBuilder::new().signer_account_id(alice()).build());
+
+        let public_key: PublicKey = pk();
+
+        // Promise is only executed when dropped so we put it in its own scope to make sure receipts
+        // are ready afterwards.
+        {
+            Promise::new(alice()).create_account().add_full_access_key(public_key.clone());
+        }
+
+        assert!(has_add_key_with_full_access(public_key, None));
+    }
+
+    #[test]
+    fn test_add_full_access_key_with_nonce() {
+        testing_env!(VMContextBuilder::new().signer_account_id(alice()).build());
+
+        let public_key: PublicKey = pk();
+        let nonce = 42;
+
+        {
+            Promise::new(alice())
+                .create_account()
+                .add_full_access_key_with_nonce(public_key.clone(), nonce);
+        }
+
+        assert!(has_add_key_with_full_access(public_key, Some(nonce)));
+    }
+
+    #[test]
+    fn test_add_access_key_allowance() {
+        testing_env!(VMContextBuilder::new().signer_account_id(alice()).build());
+
+        let public_key: PublicKey = pk();
+        let allowance = 100;
+        let receiver_id = bob();
+        let function_names = "method_a,method_b".to_string();
+
+        {
+            Promise::new(alice()).create_account().add_access_key_allowance(
+                public_key.clone(),
+                Allowance::Limited(allowance.try_into().unwrap()),
+                receiver_id.clone(),
+                function_names.clone(),
+            );
+        }
+
+        assert!(has_add_key_with_function_call(
+            public_key,
+            allowance,
+            receiver_id,
+            function_names,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_add_access_key() {
+        testing_env!(VMContextBuilder::new().signer_account_id(alice()).build());
+
+        let public_key: PublicKey = pk();
+        let allowance = NearToken::from_yoctonear(100);
+        let receiver_id = bob();
+        let function_names = "method_a,method_b".to_string();
+
+        {
+            #[allow(deprecated)]
+            Promise::new(alice()).create_account().add_access_key(
+                public_key.clone(),
+                allowance,
+                receiver_id.clone(),
+                function_names.clone(),
+            );
+        }
+
+        assert!(has_add_key_with_function_call(
+            public_key,
+            allowance.as_yoctonear(),
+            receiver_id,
+            function_names,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_add_access_key_allowance_with_nonce() {
+        testing_env!(VMContextBuilder::new().signer_account_id(alice()).build());
+
+        let public_key: PublicKey = pk();
+        let allowance = 100;
+        let receiver_id = bob();
+        let function_names = "method_a,method_b".to_string();
+        let nonce = 42;
+
+        {
+            Promise::new(alice()).create_account().add_access_key_allowance_with_nonce(
+                public_key.clone(),
+                Allowance::Limited(allowance.try_into().unwrap()),
+                receiver_id.clone(),
+                function_names.clone(),
+                nonce,
+            );
+        }
+
+        assert!(has_add_key_with_function_call(
+            public_key,
+            allowance,
+            receiver_id,
+            function_names,
+            Some(nonce)
+        ));
+    }
+
+    #[test]
+    fn test_add_access_key_with_nonce() {
+        testing_env!(VMContextBuilder::new().signer_account_id(alice()).build());
+
+        let public_key: PublicKey = pk();
+        let allowance = NearToken::from_yoctonear(100);
+        let receiver_id = bob();
+        let function_names = "method_a,method_b".to_string();
+        let nonce = 42;
+
+        {
+            #[allow(deprecated)]
+            Promise::new(alice()).create_account().add_access_key_with_nonce(
+                public_key.clone(),
+                allowance,
+                receiver_id.clone(),
+                function_names.clone(),
+                nonce,
+            );
+        }
+
+        assert!(has_add_key_with_function_call(
+            public_key,
+            allowance.as_yoctonear(),
+            receiver_id,
+            function_names,
+            Some(nonce)
+        ));
+    }
+
+    #[test]
+    fn test_delete_key() {
+        testing_env!(VMContextBuilder::new().signer_account_id(alice()).build());
+
+        let public_key: PublicKey = pk();
+
+        {
+            Promise::new(alice())
+                .create_account()
+                .add_full_access_key(public_key.clone())
+                .delete_key(public_key.clone());
+        }
+        let public_key = near_crypto::PublicKey::try_from(public_key).unwrap();
+
+        let has_action = get_actions().any(|el| {
+            matches!(
+                el,
+                MockAction::DeleteKey { public_key: p , receipt_index: _, } if p == public_key
+            )
+        });
+        assert!(has_action);
     }
 }

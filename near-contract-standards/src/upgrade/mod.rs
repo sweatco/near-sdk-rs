@@ -1,6 +1,5 @@
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::U64;
-use near_sdk::{env, require, AccountId, Duration, Promise, Timestamp};
+use near_sdk::{env, near, require, AccountId, Duration, Promise, Timestamp};
 
 type WrappedDuration = U64;
 
@@ -25,7 +24,7 @@ pub trait Upgradable {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[near]
 pub struct Upgrade {
     pub owner: AccountId,
     pub staging_duration: Duration,

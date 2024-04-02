@@ -5,19 +5,20 @@
 //! `LazyOption` and it will not be deserialized until requested.
 use std::marker::PhantomData;
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 
 use crate::env;
 use crate::IntoStorageKey;
+use near_sdk_macros::near;
 
 const ERR_VALUE_SERIALIZATION: &str = "Cannot serialize value with Borsh";
 const ERR_VALUE_DESERIALIZATION: &str = "Cannot deserialize value with Borsh";
 
 /// An persistent lazy option, that stores a value in the storage.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[near(inside_nearsdk)]
 pub struct LazyOption<T> {
     storage_key: Vec<u8>,
-    #[borsh_skip]
+    #[borsh(skip)]
     el: PhantomData<T>,
 }
 
@@ -91,7 +92,7 @@ where
     }
 
     fn serialize_value(value: &T) -> Vec<u8> {
-        match value.try_to_vec() {
+        match to_vec(value) {
             Ok(x) => x,
             Err(_) => env::panic_str(ERR_VALUE_SERIALIZATION),
         }

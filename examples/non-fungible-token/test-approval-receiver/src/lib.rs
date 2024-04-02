@@ -3,18 +3,13 @@ A stub contract that implements nft_on_approve for e2e testing nft_approve.
 */
 use near_contract_standards::non_fungible_token::approval::NonFungibleTokenApprovalReceiver;
 use near_contract_standards::non_fungible_token::TokenId;
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::{
-    env, log, near_bindgen, require, AccountId, Gas, PanicOnDefault,
-    PromiseOrValue,
-};
+use near_sdk::{env, log, near, require, AccountId, Gas, PanicOnDefault, PromiseOrValue};
 
-const BASE_GAS: u64 = 5_000_000_000_000;
-const PROMISE_CALL: u64 = 5_000_000_000_000;
-const GAS_FOR_NFT_ON_APPROVE: Gas = Gas(BASE_GAS + PROMISE_CALL);
+/// It is estimated that we need to attach 5 TGas for the code execution and 5 TGas for cross-contract call
+const GAS_FOR_NFT_ON_APPROVE: Gas = Gas::from_tgas(10);
 
-#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(contract_state)]
+#[derive(PanicOnDefault)]
 pub struct ApprovalReceiver {
     non_fungible_token_account_id: AccountId,
 }
@@ -24,7 +19,7 @@ trait ValueReturnTrait {
     fn ok_go(&self, msg: String) -> PromiseOrValue<String>;
 }
 
-#[near_bindgen]
+#[near]
 impl ApprovalReceiver {
     #[init]
     pub fn new(non_fungible_token_account_id: AccountId) -> Self {
@@ -32,7 +27,7 @@ impl ApprovalReceiver {
     }
 }
 
-#[near_bindgen]
+#[near]
 impl NonFungibleTokenApprovalReceiver for ApprovalReceiver {
     /// Could do anything useful to the approval-receiving contract, such as store the given
     /// approval_id for use later when calling the NFT contract. Can also return whatever it wants,
@@ -65,7 +60,7 @@ impl NonFungibleTokenApprovalReceiver for ApprovalReceiver {
                 let prepaid_gas = env::prepaid_gas();
                 let account_id = env::current_account_id();
                 Self::ext(account_id)
-                    .with_static_gas(prepaid_gas - GAS_FOR_NFT_ON_APPROVE)
+                    .with_static_gas(prepaid_gas.saturating_sub(GAS_FOR_NFT_ON_APPROVE))
                     .ok_go(msg)
                     .into()
             }
@@ -73,7 +68,7 @@ impl NonFungibleTokenApprovalReceiver for ApprovalReceiver {
     }
 }
 
-#[near_bindgen]
+#[near]
 impl ValueReturnTrait for ApprovalReceiver {
     fn ok_go(&self, msg: String) -> PromiseOrValue<String> {
         log!("in ok_go, msg={}", msg);

@@ -2,18 +2,19 @@ use crate::fungible_token::core::FungibleTokenCore;
 use crate::fungible_token::events::{FtBurn, FtTransfer};
 use crate::fungible_token::receiver::ext_ft_receiver;
 use crate::fungible_token::resolver::{ext_ft_resolver, FungibleTokenResolver};
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::LookupMap;
 use near_sdk::json_types::U128;
 use near_sdk::{
-    assert_one_yocto, env, log, require, AccountId, Balance, Gas, IntoStorageKey, PromiseOrValue,
+    assert_one_yocto, env, log, near, require, AccountId, Gas, IntoStorageKey, PromiseOrValue,
     PromiseResult, StorageUsage,
 };
 
-const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas(5_000_000_000_000);
-const GAS_FOR_FT_TRANSFER_CALL: Gas = Gas(25_000_000_000_000 + GAS_FOR_RESOLVE_TRANSFER.0);
+const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas::from_tgas(5);
+const GAS_FOR_FT_TRANSFER_CALL: Gas = Gas::from_tgas(30);
 
 const ERR_TOTAL_SUPPLY_OVERFLOW: &str = "Total supply overflow";
+
+pub type Balance = u128;
 
 /// Implementation of a FungibleToken standard.
 /// Allows to include NEP-141 compatible token to any contract.
@@ -24,7 +25,7 @@ const ERR_TOTAL_SUPPLY_OVERFLOW: &str = "Total supply overflow";
 ///     - AccountRegistrar -- interface for an account to register and unregister
 ///
 /// For example usage, see examples/fungible-token/src/lib.rs.
-#[derive(BorshDeserialize, BorshSerialize)]
+#[near]
 pub struct FungibleToken {
     /// sha256(AccountId) | AccountId -> Account balance
     pub accounts: LookupMapAdapter,
@@ -61,7 +62,7 @@ impl FungibleToken {
 
     fn measure_account_storage_usage(&mut self) {
         let initial_storage_usage = env::storage_usage();
-        let tmp_account_id = AccountId::new_unchecked("a".repeat(64));
+        let tmp_account_id = "a".repeat(64).parse().unwrap();
         self.accounts.insert(&tmp_account_id, &0u128);
         self.account_storage_usage = env::storage_usage() - initial_storage_usage;
         self.accounts.remove(&tmp_account_id);
@@ -116,7 +117,7 @@ impl FungibleToken {
         FtTransfer {
             old_owner_id: sender_id,
             new_owner_id: receiver_id,
-            amount: &U128(amount),
+            amount: U128(amount),
             memo: memo.as_deref(),
         }
         .emit();
@@ -150,12 +151,11 @@ impl FungibleTokenCore for FungibleToken {
         let amount: Balance = amount.into();
         self.internal_transfer(&sender_id, &receiver_id, amount, memo);
         let receiver_gas = env::prepaid_gas()
-            .0
-            .checked_sub(GAS_FOR_FT_TRANSFER_CALL.0)
+            .checked_sub(GAS_FOR_FT_TRANSFER_CALL)
             .unwrap_or_else(|| env::panic_str("Prepaid gas overflow"));
         // Initiating receiver's call and the callback
         ext_ft_receiver::ext(receiver_id.clone())
-            .with_static_gas(receiver_gas.into())
+            .with_static_gas(receiver_gas)
             .ft_on_transfer(sender_id.clone(), amount.into(), msg)
             .then(
                 ext_ft_resolver::ext(env::current_account_id())
@@ -188,7 +188,6 @@ impl FungibleToken {
 
         // Get the unused amount from the `ft_on_transfer` call result.
         let unused_amount = match env::promise_result(0) {
-            PromiseResult::NotReady => env::abort(),
             PromiseResult::Successful(value) => {
                 if let Ok(unused_amount) = near_sdk::serde_json::from_slice::<U128>(&value) {
                     std::cmp::min(amount, unused_amount.0)
@@ -219,7 +218,7 @@ impl FungibleToken {
                     FtTransfer {
                         old_owner_id: &receiver_id,
                         new_owner_id: sender_id,
-                        amount: &U128(refund_amount),
+                        amount: U128(refund_amount),
                         memo: Some("refund"),
                     }
                     .emit();
@@ -236,7 +235,7 @@ impl FungibleToken {
                     log!("The account of the sender was deleted");
                     FtBurn {
                         owner_id: &receiver_id,
-                        amount: &U128(refund_amount),
+                        amount: U128(refund_amount),
                         memo: Some("refund"),
                     }
                     .emit();

@@ -6,7 +6,8 @@ pub use iter::Iter;
 
 use crate::collections::{append, append_slice, Vector};
 use crate::{env, IntoStorageKey};
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::{to_vec, BorshDeserialize, BorshSerialize};
+use near_sdk_macros::near;
 use std::mem::size_of;
 
 const ERR_INCONSISTENT_STATE: &str = "The collection is an inconsistent state. Did previous smart contract execution terminate unexpectedly?";
@@ -15,7 +16,7 @@ const ERR_VALUE_DESERIALIZATION: &str = "Cannot deserialize value with Borsh";
 const ERR_VALUE_SERIALIZATION: &str = "Cannot serialize value with Borsh";
 
 /// An iterable implementation of a map that stores its content directly on the trie.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[near(inside_nearsdk)]
 pub struct UnorderedMap<K, V> {
     key_index_prefix: Vec<u8>,
     keys: Vector<K>,
@@ -174,7 +175,7 @@ where
     V: BorshSerialize + BorshDeserialize,
 {
     fn serialize_key(key: &K) -> Vec<u8> {
-        match key.try_to_vec() {
+        match to_vec(key) {
             Ok(x) => x,
             Err(_) => env::panic_str(ERR_KEY_SERIALIZATION),
         }
@@ -188,7 +189,7 @@ where
     }
 
     fn serialize_value(value: &V) -> Vec<u8> {
-        match value.try_to_vec() {
+        match to_vec(value) {
             Ok(x) => x,
             Err(_) => env::panic_str(ERR_VALUE_SERIALIZATION),
         }
@@ -510,9 +511,9 @@ mod tests {
         struct DeserializeCounter(u64);
 
         impl BorshDeserialize for DeserializeCounter {
-            fn deserialize(buf: &mut &[u8]) -> std::io::Result<Self> {
+            fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
                 DES_COUNT.fetch_add(1, Ordering::SeqCst);
-                u64::deserialize(buf).map(DeserializeCounter)
+                u64::deserialize_reader(reader).map(DeserializeCounter)
             }
         }
 

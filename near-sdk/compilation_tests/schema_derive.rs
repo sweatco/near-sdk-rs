@@ -49,7 +49,7 @@ pub fn non_mod_scoped() {
     #[derive(NearSchema)]
     struct InnerValue;
 
-    const_assert_impls!(InnerValue: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(InnerValue: near_sdk::schemars::JsonSchema);
     const_assert_impls!(InnerValue: !near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -57,7 +57,7 @@ pub fn non_mod_scoped() {
         field: InnerValue,
     }
 
-    const_assert_impls!(Value: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(Value: near_sdk::schemars::JsonSchema);
     const_assert_impls!(Value: !near_sdk::borsh::BorshSchema);
 }
 
@@ -66,14 +66,14 @@ pub fn no_schema_spec() {
     #[serde(rename = "UnitNoSchemaSpecSTRUCT")]
     struct UnitStructNoSchemaSpec;
 
-    const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(UnitStructNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
     #[serde(rename = "UNITNoSchemaSpecENUM")]
     pub enum UnitEnumNoSchemaSpec {}
 
-    const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(UnitEnumNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -89,7 +89,7 @@ pub fn no_schema_spec() {
         },
     }
 
-    const_assert_impls!(EnumNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(EnumNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(EnumNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -99,7 +99,7 @@ pub fn no_schema_spec() {
         var2: EnumNoSchemaSpec,
     }
 
-    const_assert_impls!(StructNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(StructNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(StructNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 }
 
@@ -109,7 +109,7 @@ pub fn json_schema_spec() {
     #[serde(rename = "UnitNoSchemaSpecSTRUCT")]
     pub struct UnitStructNoSchemaSpec;
 
-    const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(UnitStructNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -117,7 +117,7 @@ pub fn json_schema_spec() {
     #[serde(rename = "UNITNoSchemaSpecENUM")]
     pub enum UnitEnumNoSchemaSpec {}
 
-    const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(UnitEnumNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -134,7 +134,7 @@ pub fn json_schema_spec() {
         },
     }
 
-    const_assert_impls!(EnumNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(EnumNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(EnumNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -145,7 +145,7 @@ pub fn json_schema_spec() {
         var2: EnumNoSchemaSpec,
     }
 
-    const_assert_impls!(StructNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(StructNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(StructNoSchemaSpec: !near_sdk::borsh::BorshSchema);
 }
 
@@ -155,42 +155,40 @@ pub fn borsh_schema_spec() {
     pub struct UnitStructNoSchemaSpec;
 
     const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::borsh::BorshSchema);
-    const_assert_impls!(UnitStructNoSchemaSpec: !near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitStructNoSchemaSpec: !near_sdk::schemars::JsonSchema);
 
     #[derive(NearSchema)]
     #[abi(borsh)]
     pub enum UnitEnumNoSchemaSpec {}
 
     const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::borsh::BorshSchema);
-    const_assert_impls!(UnitEnumNoSchemaSpec: !near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitEnumNoSchemaSpec: !near_sdk::schemars::JsonSchema);
 
     #[derive(NearSchema)]
     #[abi(borsh)]
     pub enum EnumNoSchemaSpec {
         NoAttrs,
-        #[borsh_skip]
+        #[borsh(skip)]
         BorshSkip,
         Nested {
-            #[borsh_skip]
-            // fixme! rust complains of an unread field here
-            // fixme! https://github.com/near/borsh-rs/issues/111
+            #[borsh(skip)]
             nested: UnitEnumNoSchemaSpec,
         },
     }
 
     const_assert_impls!(EnumNoSchemaSpec: near_sdk::borsh::BorshSchema);
-    const_assert_impls!(EnumNoSchemaSpec: !near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(EnumNoSchemaSpec: !near_sdk::schemars::JsonSchema);
 
     #[derive(NearSchema)]
     #[abi(borsh)]
     struct StructNoSchemaSpec {
         var1: EnumNoSchemaSpec,
-        #[borsh_skip]
+        #[borsh(skip)]
         var2: EnumNoSchemaSpec,
     }
 
     const_assert_impls!(StructNoSchemaSpec: near_sdk::borsh::BorshSchema);
-    const_assert_impls!(StructNoSchemaSpec: !near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(StructNoSchemaSpec: !near_sdk::schemars::JsonSchema);
 }
 
 pub fn json_borsh_schema_spec() {
@@ -199,7 +197,7 @@ pub fn json_borsh_schema_spec() {
     #[serde(rename = "UnitNoSchemaSpecSTRUCT")]
     pub struct UnitStructNoSchemaSpec;
 
-    const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(UnitStructNoSchemaSpec: near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -207,7 +205,7 @@ pub fn json_borsh_schema_spec() {
     #[serde(rename = "UNITNoSchemaSpecENUM")]
     pub enum UnitEnumNoSchemaSpec {}
 
-    const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(UnitEnumNoSchemaSpec: near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -215,27 +213,25 @@ pub fn json_borsh_schema_spec() {
     #[serde(rename = "NoSchemaSpecENUM")]
     pub enum EnumNoSchemaSpec {
         NoAttrs,
-        #[borsh_skip]
+        #[borsh(skip)]
         BorshSkip,
         #[serde(rename = "serde_via_schemars")]
         Serde,
-        #[borsh_skip]
+        #[borsh(skip)]
         #[serde(skip)]
         BorshSerde,
         #[serde(skip)]
-        #[borsh_skip]
+        #[borsh(skip)]
         SerdeBorsh,
         #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
         Nested {
-            #[borsh_skip]
-            // fixme! borsh doesn't play well with nested attributes
-            // fixme! https://github.com/near/borsh-rs/issues/110
-            // #[serde(alias = "inner_inner_hehe")]
+            #[borsh(skip)]
+            #[serde(alias = "inner_inner_hehe")]
             nested: UnitEnumNoSchemaSpec,
         },
     }
 
-    const_assert_impls!(EnumNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(EnumNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(EnumNoSchemaSpec: near_sdk::borsh::BorshSchema);
 
     #[derive(NearSchema)]
@@ -243,11 +239,11 @@ pub fn json_borsh_schema_spec() {
     #[serde(rename = "NoSchemaSpecSTRUCT")]
     struct StructNoSchemaSpec {
         var1: EnumNoSchemaSpec,
-        #[borsh_skip]
+        #[borsh(skip)]
         var2: EnumNoSchemaSpec,
     }
 
-    const_assert_impls!(StructNoSchemaSpec: near_sdk::__private::schemars::JsonSchema);
+    const_assert_impls!(StructNoSchemaSpec: near_sdk::schemars::JsonSchema);
     const_assert_impls!(StructNoSchemaSpec: near_sdk::borsh::BorshSchema);
 }
 

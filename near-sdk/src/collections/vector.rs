@@ -4,7 +4,8 @@ use core::ops::Range;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::{to_vec, BorshDeserialize, BorshSerialize};
+use near_sdk_macros::near;
 
 use crate::collections::append_slice;
 use crate::{env, IntoStorageKey};
@@ -20,11 +21,11 @@ fn expect_consistent_state<T>(val: Option<T>) -> T {
 
 /// An iterable implementation of vector that stores its content on the trie.
 /// Uses the following map: index -> element.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[near(inside_nearsdk)]
 pub struct Vector<T> {
     len: u64,
     prefix: Vec<u8>,
-    #[borsh_skip]
+    #[borsh(skip)]
     el: PhantomData<T>,
 }
 
@@ -180,7 +181,7 @@ where
     T: BorshSerialize,
 {
     fn serialize_element(element: &T) -> Vec<u8> {
-        element.try_to_vec().unwrap_or_else(|_| env::panic_str(ERR_ELEMENT_SERIALIZATION))
+        to_vec(element).unwrap_or_else(|_| env::panic_str(ERR_ELEMENT_SERIALIZATION))
     }
 
     /// Appends an element to the back of the collection.
@@ -510,6 +511,7 @@ mod tests {
         }
 
         #[derive(Debug, BorshDeserialize)]
+        #[allow(dead_code)]
         struct WithoutBorshSerialize(u64);
 
         let deserialize_only_vec =

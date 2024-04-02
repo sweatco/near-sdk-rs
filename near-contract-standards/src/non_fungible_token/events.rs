@@ -14,14 +14,15 @@
 //! or [`NftBurn::emit_many`] respectively.
 
 use crate::event::NearEvent;
-use near_sdk::AccountId;
-use serde::Serialize;
+use near_sdk::serde::Serialize;
+use near_sdk::AccountIdRef;
 
 /// Data to log for an NFT mint event. To log this event, call [`.emit()`](NftMint::emit).
 #[must_use]
 #[derive(Serialize, Debug, Clone)]
+#[serde(crate = "near_sdk::serde")]
 pub struct NftMint<'a> {
-    pub owner_id: &'a AccountId,
+    pub owner_id: &'a AccountIdRef,
     pub token_ids: &'a [&'a str],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memo: Option<&'a str>,
@@ -45,12 +46,13 @@ impl NftMint<'_> {
 /// call [`.emit()`](NftTransfer::emit).
 #[must_use]
 #[derive(Serialize, Debug, Clone)]
+#[serde(crate = "near_sdk::serde")]
 pub struct NftTransfer<'a> {
-    pub old_owner_id: &'a AccountId,
-    pub new_owner_id: &'a AccountId,
+    pub old_owner_id: &'a AccountIdRef,
+    pub new_owner_id: &'a AccountIdRef,
     pub token_ids: &'a [&'a str],
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorized_id: Option<&'a AccountId>,
+    pub authorized_id: Option<&'a AccountIdRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memo: Option<&'a str>,
 }
@@ -72,11 +74,12 @@ impl NftTransfer<'_> {
 /// Data to log for an NFT burn event. To log this event, call [`.emit()`](NftBurn::emit).
 #[must_use]
 #[derive(Serialize, Debug, Clone)]
+#[serde(crate = "near_sdk::serde")]
 pub struct NftBurn<'a> {
-    pub owner_id: &'a AccountId,
+    pub owner_id: &'a AccountIdRef,
     pub token_ids: &'a [&'a str],
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorized_id: Option<&'a AccountId>,
+    pub authorized_id: Option<&'a AccountIdRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memo: Option<&'a str>,
 }
@@ -96,6 +99,7 @@ impl NftBurn<'_> {
 }
 
 #[derive(Serialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
 pub(crate) struct Nep171Event<'a> {
     version: &'static str,
     #[serde(flatten)]
@@ -103,6 +107,7 @@ pub(crate) struct Nep171Event<'a> {
 }
 
 #[derive(Serialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
 #[serde(tag = "event", content = "data")]
 #[serde(rename_all = "snake_case")]
 #[allow(clippy::enum_variant_names)]
@@ -123,19 +128,11 @@ fn new_171_v1(event_kind: Nep171EventKind) -> NearEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::{test_utils, AccountId};
-
-    fn bob() -> AccountId {
-        AccountId::new_unchecked("bob".to_string())
-    }
-
-    fn alice() -> AccountId {
-        AccountId::new_unchecked("alice".to_string())
-    }
+    use near_sdk::test_utils;
 
     #[test]
     fn nft_mint() {
-        let owner_id = &bob();
+        let owner_id = AccountIdRef::new_or_panic("bob");
         let token_ids = &["0", "1"];
         NftMint { owner_id, token_ids, memo: None }.emit();
         assert_eq!(
@@ -146,12 +143,16 @@ mod tests {
 
     #[test]
     fn nft_mints() {
-        let owner_id = &bob();
+        let owner_id = AccountIdRef::new_or_panic("bob");
         let token_ids = &["0", "1"];
         let mint_log = NftMint { owner_id, token_ids, memo: None };
         NftMint::emit_many(&[
             mint_log,
-            NftMint { owner_id: &alice(), token_ids: &["2", "3"], memo: Some("has memo") },
+            NftMint {
+                owner_id: AccountIdRef::new_or_panic("alice"),
+                token_ids: &["2", "3"],
+                memo: Some("has memo"),
+            },
         ]);
         assert_eq!(
             test_utils::get_logs()[0],
@@ -161,7 +162,7 @@ mod tests {
 
     #[test]
     fn nft_burn() {
-        let owner_id = &bob();
+        let owner_id = AccountIdRef::new_or_panic("bob");
         let token_ids = &["0", "1"];
         NftBurn { owner_id, token_ids, authorized_id: None, memo: None }.emit();
         assert_eq!(
@@ -172,13 +173,13 @@ mod tests {
 
     #[test]
     fn nft_burns() {
-        let owner_id = &bob();
+        let owner_id = AccountIdRef::new_or_panic("bob");
         let token_ids = &["0", "1"];
         NftBurn::emit_many(&[
             NftBurn {
-                owner_id: &alice(),
+                owner_id: AccountIdRef::new_or_panic("alice"),
                 token_ids: &["2", "3"],
-                authorized_id: Some(&bob()),
+                authorized_id: Some(AccountIdRef::new_or_panic("bob")),
                 memo: Some("has memo"),
             },
             NftBurn { owner_id, token_ids, authorized_id: None, memo: None },
@@ -191,8 +192,8 @@ mod tests {
 
     #[test]
     fn nft_transfer() {
-        let old_owner_id = &bob();
-        let new_owner_id = &alice();
+        let old_owner_id = AccountIdRef::new_or_panic("bob");
+        let new_owner_id = AccountIdRef::new_or_panic("alice");
         let token_ids = &["0", "1"];
         NftTransfer { old_owner_id, new_owner_id, token_ids, authorized_id: None, memo: None }
             .emit();
@@ -204,15 +205,15 @@ mod tests {
 
     #[test]
     fn nft_transfers() {
-        let old_owner_id = &bob();
-        let new_owner_id = &alice();
+        let old_owner_id = AccountIdRef::new_or_panic("bob");
+        let new_owner_id = AccountIdRef::new_or_panic("alice");
         let token_ids = &["0", "1"];
         NftTransfer::emit_many(&[
             NftTransfer {
-                old_owner_id: &alice(),
-                new_owner_id: &bob(),
+                old_owner_id: AccountIdRef::new_or_panic("alice"),
+                new_owner_id: AccountIdRef::new_or_panic("bob"),
                 token_ids: &["2", "3"],
-                authorized_id: Some(&bob()),
+                authorized_id: Some(AccountIdRef::new_or_panic("bob")),
                 memo: Some("has memo"),
             },
             NftTransfer { old_owner_id, new_owner_id, token_ids, authorized_id: None, memo: None },

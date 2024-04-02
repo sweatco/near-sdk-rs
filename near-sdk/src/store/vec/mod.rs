@@ -61,6 +61,7 @@ use std::{
 };
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use near_sdk_macros::NearSchema;
 
 pub use self::iter::{Drain, Iter, IterMut};
 use super::ERR_INCONSISTENT_STATE;
@@ -111,6 +112,9 @@ fn expect_consistent_state<T>(val: Option<T>) -> T {
 /// vec.extend([1, 2, 3].iter().copied());
 /// assert!(Iterator::eq(vec.into_iter(), [7, 1, 2, 3].iter()));
 /// ```
+#[derive(NearSchema)]
+#[inside_nearsdk]
+#[abi(borsh)]
 pub struct Vector<T>
 where
     T: BorshSerialize,
@@ -125,10 +129,7 @@ impl<T> BorshSerialize for Vector<T>
 where
     T: BorshSerialize,
 {
-    fn serialize<W: borsh::maybestd::io::Write>(
-        &self,
-        writer: &mut W,
-    ) -> Result<(), borsh::maybestd::io::Error> {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
         BorshSerialize::serialize(&self.len, writer)?;
         BorshSerialize::serialize(&self.values, writer)?;
         Ok(())
@@ -139,10 +140,10 @@ impl<T> BorshDeserialize for Vector<T>
 where
     T: BorshSerialize,
 {
-    fn deserialize(buf: &mut &[u8]) -> Result<Self, borsh::maybestd::io::Error> {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> Result<Self, std::io::Error> {
         Ok(Self {
-            len: BorshDeserialize::deserialize(buf)?,
-            values: BorshDeserialize::deserialize(buf)?,
+            len: BorshDeserialize::deserialize_reader(reader)?,
+            values: BorshDeserialize::deserialize_reader(reader)?,
         })
     }
 }
@@ -154,7 +155,7 @@ fn collections_vec_not_backwards_compatible() {
     let mut v1 = Vec1::new(b"m");
     v1.extend([1u8, 2, 3, 4]);
     // Old collections serializes length as `u64` when new serializes as `u32`.
-    assert!(Vector::<u8>::try_from_slice(&v1.try_to_vec().unwrap()).is_err());
+    assert!(Vector::<u8>::try_from_slice(&borsh::to_vec(&v1).unwrap()).is_err());
 }
 
 impl<T> Vector<T>
@@ -196,7 +197,7 @@ where
         self.len == 0
     }
 
-    /// Create new vector with zero elements. Prefixes storage accesss with the prefix provided.
+    /// Create new vector with zero elements. Prefixes storage access with the prefix provided.
     ///
     /// This prefix can be anything that implements [`IntoStorageKey`]. The prefix is used when
     /// storing and looking up values in storage to ensure no collisions with other collections.
@@ -349,7 +350,7 @@ where
         self.values.get_mut(index)
     }
 
-    fn swap(&mut self, a: u32, b: u32) {
+    pub(crate) fn swap(&mut self, a: u32, b: u32) {
         if a >= self.len() || b >= self.len() {
             env::panic_str(ERR_INDEX_OUT_OF_BOUNDS);
         }
@@ -546,7 +547,7 @@ where
 #[cfg(test)]
 mod tests {
     use arbitrary::{Arbitrary, Unstructured};
-    use borsh::{BorshDeserialize, BorshSerialize};
+    use borsh::{to_vec, BorshDeserialize};
     use rand::{Rng, RngCore, SeedableRng};
 
     use super::Vector;
@@ -685,8 +686,10 @@ mod tests {
         // * The storage is reused in the second part of this test, need to flush
         vec.flush();
 
-        use borsh::{BorshDeserialize, BorshSerialize};
-        #[derive(Debug, BorshSerialize, BorshDeserialize)]
+        use near_sdk_macros::near;
+
+        #[near(inside_nearsdk)]
+        #[derive(Debug)]
         struct TestType(u64);
 
         let deserialize_only_vec =
@@ -843,7 +846,7 @@ mod tests {
                             sv.flush();
                         }
                         Op::Reset => {
-                            let serialized = sv.try_to_vec().unwrap();
+                            let serialized = to_vec(&sv).unwrap();
                             sv = Vector::deserialize(&mut serialized.as_slice()).unwrap();
                         }
                         Op::Get(k) => {
@@ -875,7 +878,7 @@ mod tests {
 
         let mut vec = Vector::new(b"v".to_vec());
         vec.push("Some data");
-        let serialized = vec.try_to_vec().unwrap();
+        let serialized = to_vec(&vec).unwrap();
 
         // Expected to serialize len then prefix
         let mut expected_buf = Vec::new();

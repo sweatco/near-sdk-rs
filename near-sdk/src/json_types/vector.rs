@@ -1,9 +1,17 @@
-use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use near_sdk_macros::near;
+use serde::{Deserialize, Deserializer, Serializer};
 
 /// Helper class to serialize/deserialize `Vec<u8>` to base64 string.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize, BorshSerialize)]
-pub struct Base64VecU8(#[serde(with = "base64_bytes")] pub Vec<u8>);
+
+#[near(inside_nearsdk, serializers=[borsh, json])]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Base64VecU8(
+    #[serde(
+        serialize_with = "base64_bytes::serialize",
+        deserialize_with = "base64_bytes::deserialize"
+    )]
+    pub Vec<u8>,
+);
 
 impl From<Vec<u8>> for Base64VecU8 {
     fn from(v: Vec<u8>) -> Self {
@@ -14,21 +22,6 @@ impl From<Vec<u8>> for Base64VecU8 {
 impl From<Base64VecU8> for Vec<u8> {
     fn from(v: Base64VecU8) -> Vec<u8> {
         v.0
-    }
-}
-
-#[cfg(feature = "abi")]
-impl schemars::JsonSchema for Base64VecU8 {
-    fn is_referenceable() -> bool {
-        false
-    }
-
-    fn schema_name() -> String {
-        String::schema_name()
-    }
-
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-        String::json_schema(gen)
     }
 }
 
@@ -47,13 +40,14 @@ impl schemars::JsonSchema for Base64VecU8 {
 /// ```
 mod base64_bytes {
     use super::*;
+    use base64::Engine;
     use serde::de;
 
     pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&base64::encode(bytes))
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
@@ -61,7 +55,7 @@ mod base64_bytes {
         D: Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        base64::decode(s.as_str()).map_err(de::Error::custom)
+        base64::engine::general_purpose::STANDARD.decode(s.as_str()).map_err(de::Error::custom)
     }
 }
 

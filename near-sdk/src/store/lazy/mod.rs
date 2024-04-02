@@ -6,8 +6,10 @@
 
 mod impls;
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 use once_cell::unsync::OnceCell;
+
+use near_sdk_macros::near;
 
 use crate::env;
 use crate::store::ERR_INCONSISTENT_STATE;
@@ -40,7 +42,7 @@ pub(crate) fn serialize_and_store<T>(key: &[u8], value: &T)
 where
     T: BorshSerialize,
 {
-    let serialized = value.try_to_vec().unwrap_or_else(|_| env::panic_str(ERR_VALUE_SERIALIZATION));
+    let serialized = to_vec(value).unwrap_or_else(|_| env::panic_str(ERR_VALUE_SERIALIZATION));
     env::storage_write(key, &serialized);
 }
 
@@ -59,14 +61,14 @@ where
 /// *a = "new string".to_string();
 /// assert_eq!(a.get(), "new string");
 /// ```
-#[derive(BorshSerialize, BorshDeserialize)]
+#[near(inside_nearsdk)]
 pub struct Lazy<T>
 where
     T: BorshSerialize,
 {
     /// Key bytes to index the contract's storage.
     storage_key: Box<[u8]>,
-    #[borsh_skip]
+    #[borsh(skip, bound(deserialize = ""))]
     /// Cached value which is lazily loaded and deserialized from storage.
     cache: OnceCell<CacheEntry<T>>,
 }
@@ -168,7 +170,7 @@ mod tests {
         assert_eq!(*a, 42);
 
         *a = 30;
-        let serialized = a.try_to_vec().unwrap();
+        let serialized = to_vec(&a).unwrap();
         drop(a);
         assert_eq!(u32::try_from_slice(&env::storage_read(b"a").unwrap()).unwrap(), 30);
 

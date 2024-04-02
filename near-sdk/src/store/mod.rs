@@ -39,7 +39,7 @@
 //! - [`UnorderedMap`]: Storage version of [`std::collections::HashMap`]. No ordering
 //! guarantees.
 //!
-//! - [`TreeMap`] (`unstable`): Storage version of [`std::collections::BTreeMap`]. Ordered by key,
+//! - [`TreeMap`](TreeMap) (`unstable`): Storage version of [`std::collections::BTreeMap`]. Ordered by key,
 //! which comes at the cost of more expensive lookups and iteration.
 //!
 //! Sets:
@@ -78,9 +78,11 @@ mod lookup_set;
 pub use self::lookup_set::LookupSet;
 
 pub mod unordered_map;
+#[allow(deprecated)]
 pub use self::unordered_map::UnorderedMap;
 
 pub mod unordered_set;
+#[allow(deprecated)]
 pub use self::unordered_set::UnorderedSet;
 
 #[cfg(feature = "unstable")]

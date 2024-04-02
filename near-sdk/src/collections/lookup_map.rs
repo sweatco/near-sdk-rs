@@ -3,20 +3,21 @@
 //! makes this map more efficient in the number of reads and writes.
 use std::marker::PhantomData;
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 
 use crate::collections::append_slice;
 use crate::{env, IntoStorageKey};
+use near_sdk_macros::near;
 
 const ERR_KEY_SERIALIZATION: &str = "Cannot serialize key with Borsh";
 const ERR_VALUE_DESERIALIZATION: &str = "Cannot deserialize value with Borsh";
 const ERR_VALUE_SERIALIZATION: &str = "Cannot serialize value with Borsh";
 
 /// An non-iterable implementation of a map that stores its content directly on the trie.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[near(inside_nearsdk)]
 pub struct LookupMap<K, V> {
     key_prefix: Vec<u8>,
-    #[borsh_skip]
+    #[borsh(skip)]
     el: PhantomData<(K, V)>,
 }
 
@@ -83,7 +84,7 @@ where
     V: BorshSerialize + BorshDeserialize,
 {
     fn serialize_key(key: &K) -> Vec<u8> {
-        match key.try_to_vec() {
+        match to_vec(key) {
             Ok(x) => x,
             Err(_) => env::panic_str(ERR_KEY_SERIALIZATION),
         }
@@ -97,7 +98,7 @@ where
     }
 
     fn serialize_value(value: &V) -> Vec<u8> {
-        match value.try_to_vec() {
+        match to_vec(value) {
             Ok(x) => x,
             Err(_) => env::panic_str(ERR_VALUE_SERIALIZATION),
         }

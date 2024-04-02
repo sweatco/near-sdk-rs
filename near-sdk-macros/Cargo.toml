@@ -1,6 +1,6 @@
 [package]
 name = "near-sdk-macros"
-version = "4.1.1"
+version.workspace = true
 authors = ["Near Inc <max@nearprotocol.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -15,12 +15,22 @@ Main macro of the library for writing NEAR smart contracts.
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0"
-syn = {version = "1", features = ["full", "fold", "extra-traits", "visit"] }
-quote = "1.0"
+proc-macro2 = { version = "1",  default-features = false }
+syn = { version = "2", default-features = false }
+strum = { version = "0.26",  default-features = false }
+strum_macros = "0.26"
+quote = { version = "1.0",  default-features = false }
 Inflector = { version = "0.11.4", default-features = false, features = [] }
+darling = { version = "0.20.3", default-features = false }
+serde = { version = "1",  default-features = false, features = ["serde_derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+insta = { version = "1.31.0", features = ["yaml"] }
+prettyplease = { version = "0.2.15" }
+
 
 [features]
 abi = []
-__abi-embed = []
-__abi-generate = []
+__abi-embed = ["abi"]
+__abi-generate = ["abi"]
